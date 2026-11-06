@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -32,8 +33,9 @@ type desktop struct {
 	// trayIcon is the resource name last applied to the tray.
 	trayIcon string
 	// mini is the tray's mini player while it is open.
-	mini  mini
-	notch notchWindow
+	mini           mini
+	notch          notchWindow
+	floatingLyrics atomic.Pointer[mygo.Window]
 	// notificationTray is the temporary full-colour icon used to show a
 	// notification's cover when the user has hidden the persistent tray.
 	notificationTray  *mygo.Tray
@@ -78,6 +80,7 @@ func (d *desktop) update(fn func()) {
 		fn()
 		d.invalidateMini()
 		d.invalidateNotch()
+		d.invalidateFloatingLyrics()
 	})
 }
 
@@ -96,6 +99,13 @@ func (d *desktop) invalidate() {
 		d.win.Invalidate()
 		d.invalidateMini()
 		d.invalidateNotch()
+		d.invalidateFloatingLyrics()
+	}
+}
+
+func (d *desktop) invalidateFloatingLyrics() {
+	if w := d.floatingLyrics.Load(); w != nil {
+		w.Invalidate()
 	}
 }
 
@@ -419,8 +429,8 @@ func (d *desktop) onClose(e *mygo.CloseEvent) {
 	if d.answerClose(toTray, remember) {
 		e.PreventDefault()
 		d.hideToTray()
-	} else if runtime.GOOS == "darwin" {
-		// A remaining notch would keep the event loop alive after the main
+	} else if runtime.GOOS == "darwin" || d.floatingLyrics.Load() != nil {
+		// An auxiliary window would keep the event loop alive after the main
 		// window was destroyed. An explicit quit must close every window;
 		// OnBeforeQuit lets the close handlers pass through on that second pass.
 		e.PreventDefault()
@@ -471,6 +481,7 @@ func (d *desktop) close() {
 		return
 	}
 	d.closeNotch()
+	d.closeFloatingLyrics()
 	if d.notch.unwatch != nil {
 		d.notch.unwatch()
 		d.notch.unwatch = nil

@@ -57,7 +57,7 @@ func (a *app) miniPlayer(c *ui.Context) {
 					a.trackLine(c, m3.TitleSmall, m3.BodySmall, false).Grow(1)
 				}
 			})
-			a.scrubber(c)
+			a.scrubber(c, &a.scrub, &a.scrubbing)
 			a.transport(c, 48, 4)
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Shrink(0).Children(func() {
 				// The slider fills the width: miniWidth (344) less the padding

@@ -59,7 +59,17 @@ type nowPlayingState struct {
 	relatedList  ui.ListState
 	// miniOpen is whether the tray's mini player shows. Its side panel then
 	// loads what its tab shows, as the full-screen player's does.
-	miniOpen bool
+	miniOpen            bool
+	floatingOpen        bool
+	floatingFollow      lyricsFollow
+	floatingScroll      ui.ScrollState
+	floatingControls    bool
+	floatingScrub       float64
+	floatingScrubbing   bool
+	floatingTab         panelTab
+	floatingQueueList   ui.ListState
+	floatingQueueFollow string
+	floatingRelatedList ui.ListState
 	// speedMenu is the key of the overflow button whose speed menu is open,
 	// or empty, and speedChoices says that menu shows the speeds rather than
 	// the row that leads to them.
@@ -107,13 +117,19 @@ func (a *app) setMiniShown(open bool) {
 // Opening the panel, choosing a tab and starting a track call it; building the
 // view never does.
 func (a *app) loadPanel() {
-	if a.notch.expanded {
+	if a.notch.expanded && !a.current.IsEpisode() {
 		a.loadLyrics()
 	}
-	if !a.nowPlaying.open && !a.nowPlaying.miniOpen {
-		return
+	if a.nowPlaying.floatingOpen {
+		a.loadPanelTab(a.nowPlaying.floatingTab)
 	}
-	switch a.nowPlaying.tab {
+	if a.nowPlaying.open || a.nowPlaying.miniOpen {
+		a.loadPanelTab(a.nowPlaying.tab)
+	}
+}
+
+func (a *app) loadPanelTab(tab panelTab) {
+	switch tab {
 	case tabLyrics:
 		if a.current.IsEpisode() {
 			a.loadDetails()
@@ -251,7 +267,7 @@ func (a *app) nowPlayingMain(c *ui.Context, windowHeight float32) {
 			a.likeButton(c)
 			a.dislikeButton(c)
 		})
-		a.scrubber(c)
+		a.scrubber(c, &a.scrub, &a.scrubbing)
 		ui.Row(c).Justify(ui.Center).Children(func() {
 			a.transport(c, 72, 10)
 		})
@@ -320,26 +336,31 @@ func (a *app) sidePanel(c *ui.Context, wide, compactQueue bool) {
 		card.Grow(1).MinWidth(0).MinHeight(0)
 	}
 	card.Children(func() {
-		a.nowPlayingTabs(c, compactQueue)
+		a.nowPlayingTabs(c, compactQueue, &a.nowPlaying.tab)
 		switch a.nowPlaying.tab {
 		case tabLyrics:
 			if a.current.IsEpisode() {
 				a.detailsView(c)
 			} else {
-				a.lyricsView(c)
+				ui.Row(c.Key("floating-lyrics-action")).FillWidth().Justify(ui.End).Padding(0, 16).Children(func() {
+					if m3.IconButton(c, m3.IconButtonSpec{Icon: m3.IconOpenInNew, Label: "Open floating lyrics", Key: "open-floating-lyrics"}).Clicked() {
+						a.openFloatingLyrics()
+					}
+				})
+				a.lyricsView(c, &a.nowPlaying.lyrics.lyricsFollow, &a.nowPlaying.lyricsScroll, panelSurface(sc))
 			}
 		case tabRelated:
-			a.relatedView(c)
+			a.relatedView(c, &a.nowPlaying.relatedList)
 		case tabQueue:
-			a.queueView(c, compactQueue)
+			a.queueView(c, compactQueue, &a.nowPlaying.queueList, &a.nowPlaying.queueFollow)
 		}
 	})
 	a.lyricsSourceDialog(c)
 }
 
-func (a *app) nowPlayingTabs(c *ui.Context, compact bool) {
+func (a *app) nowPlayingTabs(c *ui.Context, compact bool, tab *panelTab) {
 	sc := m3.Of(c).Scheme
-	selectedTab := int(a.nowPlaying.tab)
+	selectedTab := int(*tab)
 	group := ui.TabsBase(c.Key("np-tabs"), &selectedTab, len(panelTabs))
 	tabs := group.List
 	if compact {
@@ -386,7 +407,7 @@ func (a *app) nowPlayingTabs(c *ui.Context, compact bool) {
 		}
 	})
 	if tabs.Changed() {
-		a.nowPlaying.tab = panelTabs[selectedTab].tab
+		*tab = panelTabs[selectedTab].tab
 		a.loadPanel()
 	}
 }
@@ -449,7 +470,7 @@ func (a *app) selectQueueRow(index int, mods ui.Modifiers) {
 }
 
 // queueView lists the tracks of the queue, with the current one picked out.
-func (a *app) queueView(c *ui.Context, compact bool) {
+func (a *app) queueView(c *ui.Context, compact bool, list *ui.ListState, followed *string) {
 	sc := m3.Of(c).Scheme
 	q := &a.queue
 	// One rhythm down the panel: the source, the switch and the count sit the
@@ -509,7 +530,6 @@ func (a *app) queueView(c *ui.Context, compact bool) {
 		a.message(c, m3.IconQueue, "The queue is empty", "", "", nil)
 		return
 	}
-	list := &a.nowPlaying.queueList
 	// A press in a row can replace the queue while the list still asks about
 	// a row of the one before, so every question checks the row is there.
 	list.Key = func(row int) any { return queueRowKey(q, row) }
@@ -529,8 +549,8 @@ func (a *app) queueView(c *ui.Context, compact bool) {
 	// Rows drag to a new place in the queue; the divider between chosen and
 	// generated tracks is not draggable itself.
 	list.Reorder = a.moveQueue
-	if a.nowPlaying.queueFollow != a.current.VideoID {
-		a.nowPlaying.queueFollow = a.current.VideoID
+	if *followed != a.current.VideoID {
+		*followed = a.current.VideoID
 		list.ScrollTo(q.rowOf(q.index), ui.Start)
 	}
 	listBottomPadding := float32(16)
@@ -552,7 +572,7 @@ func (a *app) queueView(c *ui.Context, compact bool) {
 			})
 			return
 		}
-		a.songRow(c, q.at(index), q.items, songOptions{directQueue: true, source: q.source, list: "queue", position: index, compact: compact})
+		a.songRow(c, q.at(index), q.items, songOptions{directQueue: true, source: q.source, list: "queue", position: index, compact: compact, queueFocused: list.Focused(c)})
 	}).Grow(1).Padding(0, 8, listBottomPadding).FocusRing(false)
 	if index, ok := q.trackAt(a.nowPlaying.queueSelectionCursor); ok {
 		if view.Submitted() {
@@ -566,7 +586,7 @@ func (a *app) queueView(c *ui.Context, compact bool) {
 	}
 }
 
-func (a *app) relatedView(c *ui.Context) {
+func (a *app) relatedView(c *ui.Context, list *ui.ListState) {
 	r := &a.nowPlaying.related
 	switch {
 	case r.load.busy():
@@ -575,7 +595,6 @@ func (a *app) relatedView(c *ui.Context) {
 		a.message(c, m3.IconExplore, r.err, "", "", nil)
 	default:
 		items, tracks := r.items, r.tracks
-		list := &a.nowPlaying.relatedList
 		list.Key = func(i int) any {
 			if i >= len(items) {
 				return nil

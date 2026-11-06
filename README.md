@@ -53,7 +53,12 @@ scrobble your listening to Last.fm.
 - **Lyrics that follow the song.** The line being sung is highlighted as the
   song plays, and word-synced lyrics light each word as it is reached. Meiro
   takes them from Better Lyrics, YouTube Music or LRCLIB. You can switch to
-  plain text.
+  plain text, or use **Floating lyrics** in the navigation rail for a movable,
+  resizable window that stays above other apps, even with the main window hidden.
+  Its Up next, Lyrics and Related tabs work independently of the main player.
+  On supported systems, clear glass lets you see the window behind the lyrics.
+  Playback buttons stay visible; the chevron reveals artwork, seeking, volume
+  and playback speed controls.
 - **Music that keeps going.** When your queue ends, Meiro adds similar songs so
   the music does not stop.
 - **Pick up where you left off.** Open Meiro again and your queue and song are

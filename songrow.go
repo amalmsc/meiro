@@ -29,6 +29,8 @@ type songOptions struct {
 	source      string
 	// compact fits queue rows in the tray mini player.
 	compact bool
+	// queueFocused is whether this row's queue list has keyboard focus.
+	queueFocused bool
 }
 
 // songKey identifies a row of a song in its list, for the element tree and
@@ -58,7 +60,7 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 	isSong := item.IsTrack()
 	playing := a.playingRow(item, o)
 	selected := o.list == "queue" && a.nowPlaying.queueSelection.Has(queueRowKey(&a.queue, a.queue.rowOf(o.position)))
-	queueCursor := o.list == "queue" && a.nowPlaying.queueList.Focused(c) && a.nowPlaying.queueSelectionCursor == a.queue.rowOf(o.position)
+	queueCursor := o.list == "queue" && o.queueFocused && a.nowPlaying.queueSelectionCursor == a.queue.rowOf(o.position)
 	key := songKey(item, o)
 	height, artSize, padding, gap, iconSize := float32(rowHeight), float32(48), float32(8), float32(12), float32(24)
 	titleRole, subtitleRole := m3.BodyLarge, m3.BodyMedium

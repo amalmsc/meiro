@@ -165,3 +165,265 @@ func TestLyricWordsLightAsTheyAreSung(t *testing.T) {
 		t.Fatalf("the word still to come is lit: %#v", spans)
 	}
 }
+
+func TestFloatingLyricsFollowPlaybackIndependently(t *testing.T) {
+	a := newTestApp(t)
+	a.betterLyrics = func(_ context.Context, q betterlyrics.Query) ([]lyrics.Line, error) {
+		return []lyrics.Line{
+			{At: 0, Text: q.Title + " opening"},
+			{At: 10 * time.Second, Text: q.Title + " chorus"},
+			{At: 40 * time.Second, Text: q.Title + " ending"},
+		}, nil
+	}
+	a.queue.restore(playstate.State{Items: tracks("a", "b"), Index: 0, RecStart: -1})
+	a.current = a.queue.current()
+	a.total, a.resumeID, a.scrub = time.Minute, "a", 15
+	main := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
+	a.setMiniShown(true)
+	main.Frame()
+	if err := main.Click("Lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	main.Frame()
+	if err := main.Click("Open floating lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	main.Frame()
+	floating := ui.NewTester(a.floatingLyricsView, 480, 420)
+	for range 8 {
+		main.Frame()
+		floating.Frame()
+	}
+	if !a.nowPlaying.floatingOpen || !floating.HasText(a.current.Title+" chorus") {
+		t.Fatalf("floating lyrics did not open: %q", floating.Texts())
+	}
+	// Different-sized windows must each center the current line, even when
+	// the other window has already followed it.
+	for _, tt := range []*ui.Tester{main, floating} {
+		line, ok := tt.Find(a.current.Title + " chorus")
+		if !ok {
+			t.Fatal("current line is missing")
+		}
+		modes, ok := tt.Find("Synced lyrics")
+		if !ok {
+			t.Fatal("lyrics switch is missing")
+		}
+		bottom := float32(420)
+		if tt == main {
+			footer, _ := main.Find("Open Meiro")
+			bottom = footer.Y
+		}
+		middle := (modes.Y + modes.H + bottom) / 2
+		if got := line.Y + line.H/2; got < middle-24 || got > middle+24 {
+			t.Fatalf("current line center is %.0f, want %.0f", got, middle)
+		}
+	}
+	floating.SetSize(320, 320)
+	for range 4 {
+		floating.Frame()
+	}
+	line, _ := floating.Find(a.current.Title + " chorus")
+	if line.Y < 180 || line.Y+line.H > 320 {
+		t.Fatalf("shrinking the window clipped the current lyric: %+v", line)
+	}
+	floating.SetSize(480, 420)
+	floating.Frame()
+	if err := floating.Click(a.current.Title + " chorus"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	if got := a.seekTarget; got != 10*time.Second {
+		t.Fatalf("clicking a floating line requested %s", got)
+	}
+	if floating.HasText("Volume") || floating.HasText("Position") {
+		t.Fatal("extra controls should start collapsed")
+	}
+	if err := floating.Click("Show player controls"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	for _, label := range []string{"Play", "Previous", "Next", "Volume", "Position", "Playback speed: 1×"} {
+		if _, ok := floating.Find(label); !ok {
+			t.Fatalf("expanded controls lack %q", label)
+		}
+	}
+	position, _ := floating.Find("Position")
+	x, y := position.X+position.W*0.75, position.Y+position.H/2
+	version := a.seekVersion
+	floating.Press(x, y)
+	floating.Frame()
+	main.Frame()
+	if a.seekVersion != version {
+		t.Fatal("another window's frame ended the floating seek drag")
+	}
+	floating.Release(x, y)
+	floating.Frame()
+	if a.seekVersion == version || a.seekTarget <= 30*time.Second {
+		t.Fatalf("releasing the floating position did not seek: %s", a.seekTarget)
+	}
+	if err := floating.Click("Mute"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	if a.volume != 0 {
+		t.Fatal("floating mute did not mute playback")
+	}
+	if err := floating.Click("Hide player controls"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	if floating.HasText("Volume") || floating.HasText("Position") {
+		t.Fatal("extra controls did not collapse")
+	}
+	for _, label := range []string{"Play", "Previous", "Next"} {
+		if _, ok := floating.Find(label); !ok {
+			t.Fatalf("collapsed controls hid %q", label)
+		}
+	}
+	// Lyrics must keep loading with neither the main nor tray panel open.
+	a.setMiniShown(false)
+	a.nowPlaying.tab = tabQueue
+	if err := floating.Click("Next"); err != nil {
+		t.Fatal(err)
+	}
+	main.Frame()
+	floating.Frame()
+	if a.current.VideoID != "b" || !floating.HasText(a.current.Title+" opening") {
+		t.Fatalf("floating lyrics did not follow the next song: %q", floating.Texts())
+	}
+	if err := floating.Click("Synced lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	if !a.settings.StaticLyrics || !floating.HasText(a.nowPlaying.lyrics.text) {
+		t.Fatalf("floating static lyrics are missing: %q", floating.Texts())
+	}
+	if err := floating.Click("Close floating lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	if a.nowPlaying.floatingOpen {
+		t.Fatal("floating lyrics did not close")
+	}
+}
+
+func TestFloatingPlayerIsAvailableAcrossPagesAndHasIndependentTabs(t *testing.T) {
+	a := newTestApp(t)
+	a.settings.AutoPlay = false
+	a.queue.restore(playstate.State{Items: tracks("song-related", "b"), Index: 0, RecStart: -1})
+	a.current = a.queue.current()
+	main := ui.NewTester(a.view, 1000, 800)
+	for _, expanded := range []bool{false, true} {
+		a.settings.RailExpanded = expanded
+		for _, path := range []string{"/home", "/explore", "/search", "/settings", "/stats", "/playlist/VLPL_songs"} {
+			a.router.Push(path)
+			main.Frame()
+			if err := main.Click("Floating lyrics"); err != nil {
+				t.Fatalf("expanded=%t, page=%s: %v", expanded, path, err)
+			}
+			main.Frame()
+			if !a.nowPlaying.floatingOpen || a.router.Path() != path {
+				t.Fatalf("floating action navigated away from %s", path)
+			}
+		}
+	}
+	floating := ui.NewTester(a.floatingLyricsView, 480, 480)
+	floating.Frame()
+	if err := floating.Click("Related"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	if !floating.HasText("Related Song") || !floating.HasText("Related Playlist") {
+		t.Fatalf("floating Related did not load: %q", floating.Texts())
+	}
+	a.router.Push("/home")
+	if err := floating.Click("Related Playlist"); err != nil {
+		t.Fatal(err)
+	}
+	if a.path() != "/playlist/VLPL_songs" || a.current.VideoID != "song-related" {
+		t.Fatal("a floating related playlist should open its page without changing playback")
+	}
+	a.setMiniShown(true)
+	mini := ui.NewTester(a.miniPlayer, miniWidth, miniHeight)
+	mini.Frame()
+	if !mini.HasText("Clear queue") || mini.HasText("Related Song") {
+		t.Fatal("changing the floating tab changed the mini player's tab")
+	}
+	if err := floating.Click("Up next"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	if !floating.HasText("Track b") {
+		t.Fatalf("floating Up next lacks the queued song: %q", floating.Texts())
+	}
+	if err := floating.Click("Clear queue"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	mini.Frame()
+	if a.queue.remaining() != 0 || floating.HasText("Track b") || mini.HasText("Track b") {
+		t.Fatal("clearing the floating queue did not update shared playback")
+	}
+	if err := floating.Click("Lyrics"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	if !floating.HasText("No lyrics for this song.") {
+		t.Fatalf("returning to floating lyrics failed: %q", floating.Texts())
+	}
+	if err := floating.Click("Related"); err != nil {
+		t.Fatal(err)
+	}
+	floating.Frame()
+	if err := floating.Click("Related Song"); err != nil {
+		t.Fatal(err)
+	}
+	if a.current.VideoID != "rel-song" || a.queue.source != "Related" {
+		t.Fatal("choosing a floating related song did not play it")
+	}
+}
+
+func TestFloatingLyricsLeaveGlassVisibleWithoutFadingText(t *testing.T) {
+	for _, static := range []bool{false, true} {
+		t.Run(fmt.Sprintf("static=%t", static), func(t *testing.T) {
+			a := newTestApp(t)
+			a.current = tracks("a")[0]
+			a.total, a.resumeID = time.Minute, "a"
+			a.settings.StaticLyrics = static
+			a.betterLyrics = func(context.Context, betterlyrics.Query) ([]lyrics.Line, error) {
+				return []lyrics.Line{{At: 0, Text: "Keep these lyrics clear"}}, nil
+			}
+			a.openFloatingLyrics()
+			tt := ui.NewTester(a.floatingLyricsView, 480, 420)
+			for _, glass := range []bool{true, false, true} {
+				tt.SetVibrancy(glass)
+				for range 4 {
+					tt.Frame()
+				}
+				img := tt.Image()
+				// Include both ends of the synced list: opaque fade overlays
+				// must not cover the native material either.
+				for _, y := range []int{4, 130, 400} {
+					_, _, _, alpha := img.At(4, y).RGBA()
+					if glass && alpha != 0 || !glass && alpha != 0xffff {
+						t.Fatalf("glass=%t: background alpha at y=%d is %d", glass, y, alpha)
+					}
+				}
+				line, ok := tt.Find("Keep these lyrics clear")
+				if !ok {
+					t.Fatal("lyrics are missing")
+				}
+				opaque := false
+				for y := int(line.Y); y < int(line.Y+line.H); y++ {
+					for x := int(line.X); x < int(line.X+line.W); x++ {
+						_, _, _, alpha := img.At(x, y).RGBA()
+						opaque = opaque || alpha == 0xffff
+					}
+				}
+				if !opaque {
+					t.Fatal("the current lyric was faded with its background")
+				}
+			}
+		})
+	}
+}

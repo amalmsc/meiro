@@ -142,6 +142,7 @@ go_library(
         "downloads.go",
         "episodes.go",
         "eq.go",
+        "floatinglyrics.go",
         "fonts.go",
         "hero.go",
         "historysettings.go",

@@ -115,6 +115,7 @@ func (a *app) rail(c *ui.Context, bar ui.TitleBar) {
 			items = append(items, item)
 		}
 	}
+	footer = append(footer, m3.NavItem{ID: "floating-lyrics", Label: "Floating lyrics", Icon: m3.IconLyrics})
 	r, _ := a.route()
 	selected := ""
 	if r.nav != routeNotFound {
@@ -136,7 +137,9 @@ func (a *app) rail(c *ui.Context, bar ui.TitleBar) {
 		a.settings.RailExpanded = !a.settings.RailExpanded
 		a.saveSettings()
 	}
-	if event.Item != "" && event.Item != selected {
+	if event.Item == "floating-lyrics" {
+		a.openFloatingLyrics()
+	} else if event.Item != "" && event.Item != selected {
 		a.router.Push(event.Item)
 	} else if event.Item != "" && a.nowPlaying.open && !a.nowPlaying.closing {
 		// The page is already showing, so its tab has nothing to open: with

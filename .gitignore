@@ -17,3 +17,8 @@ mygo_windows_*.syso
 website/.wrangler/
 
 website/node_modules/
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/.gitignore
+/.idea/meiro.iml
+/.idea/modules.xml
+/.idea/vcs.xml

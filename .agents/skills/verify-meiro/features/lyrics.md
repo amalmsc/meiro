@@ -17,6 +17,7 @@ player and the macOS notch show the same lyrics in their own layouts.
 - `lyrics-seek`: clicking a line seeks to it.
 - `lyrics-fallback`: no lyrics and a failed lookup are different states; a failure is tried again the next time the tab opens.
 - `lyrics-cache`: lyrics are kept per track while it plays; changing songs supersedes the lookup.
+- `lyrics-floating`: Open floating lyrics in the Lyrics tab opens one movable, resizable, always-on-top window. It shares the lookup and playback position, but follows and scrolls independently. It keeps loading songs with both player panels closed, supports static lyrics and seeking, and can be closed and reopened. Native clear glass reveals other windows on macOS (Liquid Glass on 26+, HUD material earlier) and Acrylic on Windows 11; systems without a material keep a solid background. Lyrics stay opaque and the synced list must not paint opaque fade strips over glass.
 
 ## How to get to it (user POV)
 
@@ -25,6 +26,19 @@ menu bar on macOS, or the tray icon on Linux and Windows), or open Now Playing
 in the main window on a wide screen, and choose Lyrics. With word-synced
 lyrics, the line being sung fills in word by word. The name at the right of the
 Synced and Static buttons is where the lyrics came from.
+
+Click **Floating lyrics** at the bottom of the navigation rail on any page,
+or **Open floating lyrics** (the pop-out icon) in either player's Lyrics tab.
+Drag its native title bar to move it and its edges to resize it. Close
+it with its close button; reopening an already open window focuses it instead
+of opening another copy. Hiding the main window leaves floating lyrics visible.
+Previous, play/pause, next, shuffle and repeat stay visible. **Show player
+controls** expands artwork, track details, seeking, volume and the playback
+speed menu; **Hide player controls** collapses them without hiding the lyrics.
+Its Up next, Lyrics and Related tabs are independent of the main/tray player's
+selected tab. Episodes show Details instead of Lyrics. Queue actions change
+shared playback; related songs play and related collections open in the main
+window without closing the floating player.
 
 ## Driving it with the headless tester
 
@@ -38,6 +52,37 @@ The mini player shows the lyrics tab at 344 × 640. The Now Playing panel only
 shows its side panel on a wide window: build `ui.NewTester(a.view, 1400, 800)`,
 call `a.openPlayer(tabLyrics, false)`, draw a frame, then advance the clock so
 the player finishes rising.
+
+After clicking Open floating lyrics, build a second tester with
+`a.floatingLyricsView` at 480 × 480 and also check its minimum 320 × 320 size
+(288 pixels of content under the macOS native title bar).
+Alternate frames in both windows and verify each centers the current line.
+Switch to Up next and close both main/tray panels before changing songs to
+check the floating window alone keeps loading lyrics. Native checks must
+cover always-on-top, moving/resizing, reuse, closing/reopening, and keeping
+the panel visible while the main window hides. An offline macOS fixture
+verified these native lifecycle checks; Windows and Linux remain unverified.
+
+Expand and collapse the controls at both 480 and 320 pixels wide. Expansion
+raises the native minimum height to 480 so lyrics still fit; collapse permits
+320 again. Verify the current lyric stays visible after resizing and toggling.
+Drag the floating position slider, build a main-window frame while held, then
+release: only release should seek. Also exercise mute and Next with both other
+panels closed. The offline macOS fixture verified both control layouts over
+glass, including the narrow expanded and minimum collapsed sizes.
+Click the rail button on Home, Explore, Search, Settings, Stats and a detail
+page, with the rail both collapsed and expanded: it must open without navigating.
+Exercise Up next, Related and Lyrics while the main player's tab stays unchanged,
+including Clear queue and playing a related song. The offline macOS fixture
+visually checked every tab at normal/minimum size and expanded lyrics/related.
+
+For glass, run the tester with `SetVibrancy(true)` and verify alpha is zero in
+blank regions, including the top/bottom of the synced list, while the current
+lyric still has opaque pixels. Toggle back to false to verify the solid fallback.
+Native verification must put a colored offline fixture behind the panel and
+capture the actual screen region: a single-window screenshot omits the backdrop
+and makes clear glass look black. macOS synced/static glass and the solid
+fallback were visually checked this way; Windows Acrylic remains unverified.
 
 ## Gotchas
 

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Keep lyrics above your other apps.** Open floating lyrics from the navigation rail on any page, or from the Lyrics tab in Now Playing or the tray mini player. The separate window can be moved and resized, follows the song, and stays visible when the main window is hidden. Its Up next, Lyrics and Related tabs work independently of the main player. Playback buttons stay visible; expand the chevron for artwork, seeking, volume and playback speed. Clear glass reveals the window behind it on supported systems, without fading the lyrics; elsewhere it uses a solid background.
+
 ## [0.6.0] - 2026-11-03
 
 ### Added

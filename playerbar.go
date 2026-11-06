@@ -71,29 +71,31 @@ func (a *app) transport(c *ui.Context, size float32, gap float32) {
 // scrubber is the position slider: a wave that travels while the music plays
 // and goes flat when it stops. It follows the player until the user takes it,
 // and seeks when they let go. Times stand at both ends.
-func (a *app) scrubber(c *ui.Context) {
+func (a *app) scrubber(c *ui.Context, position *float64, scrubbing *bool) {
 	sc := m3.Of(c).Scheme
 	known := a.total > 0
 	total := a.total.Seconds()
 	if !known {
-		total, a.scrub = 1, 0
+		total, *position = 1, 0
 	}
-	a.scrub = min(a.scrub, total)
+	*position = min(*position, total)
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		m3.Text(c, m3.LabelMedium, clock(time.Duration(a.scrub*float64(time.Second)))).
+		m3.Text(c, m3.LabelMedium, clock(time.Duration(*position*float64(time.Second)))).
 			MinWidth(40).NoWrap().TextAlign(ui.End).Shrink(0).TextColor(sc.OnSurfaceVariant).FontFeatures("tnum")
-		slider := m3.Slider(c, &a.scrub, 0, total, m3.SliderSpec{
+		slider := m3.Slider(c, position, 0, total, m3.SliderSpec{
 			Label: "Position", Key: "scrubber", Wavy: true, Waving: a.player.Playing(), Disabled: !known,
 		})
 		if slider.Pressed() {
-			a.scrubbing = true
+			*scrubbing = true
 		}
-		if a.scrubbing && !slider.Pressed() {
-			a.scrubbing = false
-			a.seek(time.Duration(a.scrub * float64(time.Second)))
+		if *scrubbing && !slider.Pressed() {
+			*scrubbing = false
+			a.scrub = *position
+			a.seek(time.Duration(*position * float64(time.Second)))
 		} else if slider.Changed() && !slider.Pressed() {
 			// Arrow keys, Home and End change the value without a pointer press.
-			a.seek(time.Duration(a.scrub * float64(time.Second)))
+			a.scrub = *position
+			a.seek(time.Duration(*position * float64(time.Second)))
 		}
 		m3.Text(c, m3.LabelMedium, clock(a.total)).MinWidth(40).NoWrap().Shrink(0).TextColor(sc.OnSurfaceVariant).FontFeatures("tnum")
 	})
@@ -367,7 +369,7 @@ func (a *app) playerBar(c *ui.Context) {
 		}
 		ui.Column(c).Grow(transportGrow).Basis(0).MinWidth(220).MaxWidth(580).Gap(0).Children(func() {
 			a.transport(c, 48, 4)
-			a.scrubber(c)
+			a.scrubber(c, &a.scrub, &a.scrubbing)
 		})
 
 		// The buttons on the right never overflow the bar: when their share is

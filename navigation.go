@@ -195,6 +195,8 @@ func (a *app) openTarget(target youtube.Target, heading detail) {
 		a.setMiniShown(false)
 		a.desktop.closeMini()
 		a.desktop.bringToFront()
+	} else if a.nowPlaying.floatingOpen {
+		a.desktop.bringToFront()
 	}
 }
 
