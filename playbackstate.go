@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/elianiva/meiro/internal/playstate"
+	"github.com/elianiva/meiro/internal/video"
 	"github.com/elianiva/meiro/youtube"
 )
 
@@ -27,9 +28,10 @@ type playbackSave struct {
 	writer playstate.Writer
 	// last is what was last handed to the writer, to skip a save that would
 	// write what is already there.
-	last   queueMark
-	lastAt time.Duration
-	saved  bool
+	last      queueMark
+	lastAt    time.Duration
+	saved     bool
+	lastVideo playstate.Video
 }
 
 // queueMark is what makes one queue differ from another: the tracks in their
@@ -83,6 +85,16 @@ func (a *app) restorePlayback(path string) {
 	a.playSave.writer.Path = path
 	s := playstate.Load(path)
 	a.episodes = s.Episodes
+	if v := s.Video; v != nil {
+		if canonical, err := youtubeVideoURL(v.URL); err == nil {
+			position := max(v.Position, 0)
+			if v.Duration > 0 && position >= v.Duration-restoreEndGuard {
+				position = 0
+			}
+			a.videoPlayback = video.Playback{URL: canonical, Title: v.Title, Channel: v.Channel, Position: position, Duration: v.Duration, Paused: true}
+			a.videoReopen = v.Open
+		}
+	}
 	if s.Empty() {
 		return
 	}
@@ -121,18 +133,25 @@ func (a *app) persistPlayback() { a.savePlayback(positionStep) }
 // by step or more. A step of 0 saves any change, as at exit, where the last
 // seconds of listening are worth keeping.
 func (a *app) savePlayback(step time.Duration) {
-	if a.current.VideoID == "" || a.queue.len() == 0 {
+	if (a.current.VideoID == "" || a.queue.len() == 0) && a.videoPlayback.URL == "" {
 		return
 	}
 	s := &a.playSave
 	mark, position := a.queue.mark(), a.playbackPosition()
 	moved := position - s.lastAt
-	if s.saved && mark == s.last && moved > -step && moved < step {
+	v := playstate.Video{URL: a.videoPlayback.URL, Title: a.videoPlayback.Title, Channel: a.videoPlayback.Channel, Position: a.videoPlayback.Position, Duration: a.videoPlayback.Duration, Open: a.videoReopen}
+	videoMoved := v.Position - s.lastVideo.Position
+	videoUnchanged := v.URL == s.lastVideo.URL && v.Open == s.lastVideo.Open && v.Title == s.lastVideo.Title && v.Channel == s.lastVideo.Channel && v.Duration == s.lastVideo.Duration && videoMoved > -step && videoMoved < step
+	if s.saved && mark == s.last && moved > -step && moved < step && videoUnchanged {
 		return
 	}
 	s.last, s.lastAt, s.saved = mark, position, true
+	s.lastVideo = v
 	state := a.queue.state(position)
 	state.Episodes = a.episodes
+	if v.URL != "" {
+		state.Video = &v
+	}
 	s.writer.Save(state)
 }
 

@@ -290,6 +290,8 @@ func (a *app) useSession(s *session, from sessionSource) {
 	a.stopAccountWork()
 	if a.account.session != s {
 		a.finishEpisodeProgress(false)
+		a.finishVideoProgress(false)
+		a.videoStart.stop()
 	}
 	a.account.session = s
 	a.account.expired = ""
@@ -321,6 +323,8 @@ func (a *app) endSession(reason string) {
 	a.stopAccountWork()
 	had := a.account.session != nil
 	a.finishEpisodeProgress(false)
+	a.finishVideoProgress(false)
+	a.videoStart.stop()
 	a.account.session = nil
 	a.account.expired = ""
 	a.account.signIn.err = reason

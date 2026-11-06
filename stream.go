@@ -88,7 +88,9 @@ func (a *app) streamAudio(item youtube.MusicItem, startAt time.Duration, changed
 		}
 		// Opening the audio device and starting ffmpeg take long enough to
 		// be felt, so they happen here and not on the main thread.
-		found.playErr = a.player.PlayAtContext(ctx, found.url, startAt, false)
+		// Open held: only the main thread may grant playback. In particular,
+		// a video can take over while the stream/device is being opened.
+		found.playErr = a.player.PlayAtContext(ctx, found.url, startAt, true)
 		return found, nil
 	}, func(found resolvedAudio, err error) {
 		if found.loudnessOK {
@@ -111,7 +113,10 @@ func (a *app) streamAudio(item youtube.MusicItem, startAt time.Duration, changed
 		}
 		log.Printf("playback: audio started video_id=%s from_cache=%t duration=%s", item.VideoID, found.fromCache, found.total)
 		a.applySpeed() // a speed chosen while the audio was on its way
-		a.audioStarted(item, found, a.player.Position(), changed, cache)
+		a.readyAudio = func() { a.audioStarted(item, found, a.player.Position(), changed, cache) }
+		if !a.watchingVideo {
+			a.resumeAudio()
+		}
 		a.syncSystemMedia()
 	})
 }
@@ -312,7 +317,7 @@ func (a *app) recoverStream(failure string) bool {
 		if err != nil || ctx.Err() != nil {
 			return found, err
 		}
-		found.playErr = a.player.PlayAtContext(ctx, found.url, at, paused)
+		found.playErr = a.player.PlayAtContext(ctx, found.url, at, true)
 		return found, nil
 	}, func(found resolvedAudio, err error) {
 		if err == nil {
@@ -328,8 +333,8 @@ func (a *app) recoverStream(failure string) bool {
 		}
 		a.applyLoudness()
 		a.applySpeed()
-		if paused && bySleep && !a.suspendedWhilePlaying {
-			a.player.Resume() // the wake came while the stream was on its way
+		if !a.watchingVideo && (!paused || bySleep && !a.suspendedWhilePlaying) {
+			a.player.Resume() // includes a wake while the stream was on its way
 		}
 		a.syncSystemMedia()
 	})

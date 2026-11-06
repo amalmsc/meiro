@@ -538,7 +538,10 @@ func (a *app) setupDesktop() {
 		})
 	})
 	a.desktop.closeToTray(a.closeToBackgroundChoice, a.answerClose)
-	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) { a.desktop.quitting = true })
+	mygo.App.OnBeforeQuit(func(*mygo.QuitEvent) {
+		a.desktop.quitting = true
+		a.prepareVideoShutdown()
+	})
 	a.setupNotch()
 	a.syncDesktop()
 	a.syncShortcut()

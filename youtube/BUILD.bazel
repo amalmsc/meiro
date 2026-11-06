@@ -20,6 +20,7 @@ go_library(
         "subscription.go",
         "tracktabs.go",
         "upnext.go",
+        "videos.go",
     ],
     importpath = "github.com/elianiva/meiro/youtube",
     visibility = ["//visibility:public"],
@@ -41,6 +42,7 @@ go_test(
         "search_test.go",
         "subscription_test.go",
         "upnext_test.go",
+        "videos_test.go",
     ],
     embed = [":youtube"],
 )

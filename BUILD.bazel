@@ -182,6 +182,8 @@ go_library(
         "theme.go",
         "toolhelp.go",
         "upnext.go",
+        "video.go",
+        "videobrowse.go",
         "zoom.go",
     ],
     embedsrcs = ["fonts/GoogleSans.ttf"],
@@ -209,6 +211,7 @@ go_library(
         "//internal/report",
         "//internal/secretfile",
         "//internal/settings",
+        "//internal/video",
         "//internal/ytdlp",
         "//m3",
         "//player",
@@ -270,6 +273,7 @@ go_test(
         "shortcuts_test.go",
         "states_test.go",
         "subscription_test.go",
+        "video_darwin_test.go",
         "zoom_test.go",
     ],
     embed = [":meiro_lib"],
@@ -299,5 +303,10 @@ go_test(
         "//youtube",
         "@com_github_egoist_mygo//:mygo",
         "@com_github_egoist_mygo//ui",
-    ],
+    ] + select({
+        "@rules_go//go/platform:darwin": [
+            "//internal/video",
+        ],
+        "//conditions:default": [],
+    }),
 )

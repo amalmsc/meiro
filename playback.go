@@ -90,12 +90,15 @@ type playback struct {
 	// resumeID is the restored track that has not played yet; the first play
 	// of it starts at a.scrub, where the last run left it.
 	resumeID string
+	// readyAudio records a resolved track only when playback is allowed to
+	// begin; a video may have taken over while its audio was being opened.
+	readyAudio func()
 	// episodes are where the podcast episodes left part-way through stopped,
 	// the one left last first. Playing one again starts there.
 	episodes []playstate.Episode
 	// episodeProgress is the authenticated YouTube watch-time session for the
 	// episode playing. It is nil while signed out or between episodes.
-	episodeProgress *episodeProgressSync
+	episodeProgress *playbackProgressSync
 }
 
 func newPlayback(streams *audio.URLs, volume float64) playback {
@@ -123,6 +126,7 @@ func (a *app) playFromWithContinuation(item youtube.MusicItem, tracks []youtube.
 	if item.VideoID == "" {
 		return
 	}
+	a.useMusic()
 	a.queueRest.stop()
 	a.clearQueueSelection()
 	a.queue.replace(item, tracks, index, source)
@@ -185,6 +189,9 @@ func (a *app) skipUnplayable(item youtube.MusicItem) {
 // startTrack is start without ending a run of skipped tracks. automatic says
 // the queue chose item, rather than the listener.
 func (a *app) startTrack(item youtube.MusicItem, automatic bool) {
+	if !automatic {
+		a.useMusic()
+	}
 	a.aiCheck.stop()
 	a.stream.stop()
 	startAt, changed := a.enterTrack(item, automatic)
@@ -207,6 +214,7 @@ func (a *app) startTrackNow(item youtube.MusicItem, startAt time.Duration, chang
 // enterTrack makes item the current track, and says where in it to start and
 // whether it is another track than the one before.
 func (a *app) enterTrack(item youtube.MusicItem, automatic bool) (time.Duration, bool) {
+	a.readyAudio = nil
 	a.recoveries = 0
 	changed := a.current.VideoID != item.VideoID
 	if changed {
@@ -620,6 +628,9 @@ func (a *app) togglePlay() {
 // resume plays a paused track, or starts the current one again when it has
 // ended or failed. It does nothing while a track plays or is on its way.
 func (a *app) resume() {
+	if a.current.VideoID != "" {
+		a.useMusic()
+	}
 	if a.starting() || a.player.Playing() {
 		return
 	}
@@ -628,12 +639,20 @@ func (a *app) resume() {
 			a.start(a.current)
 		}
 	} else {
-		a.player.Resume()
+		a.resumeAudio()
 		if a.current.IsEpisode() {
 			a.beginEpisodeProgress(a.current, a.player.Position(), a.total)
 		}
 	}
 	a.syncSystemMedia()
+}
+
+func (a *app) resumeAudio() {
+	a.player.Resume()
+	if ready := a.readyAudio; ready != nil {
+		a.readyAudio = nil
+		ready()
+	}
 }
 
 // pause holds the track where it is.

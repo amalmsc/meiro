@@ -31,6 +31,7 @@ This directory is the maintained source for verifying what a Meiro user can do. 
 - [Podcasts](./podcast.md) covers opening a show, reading its episodes and resuming an episode.
 - [Search](./search.md) covers the bar, suggestions, results, filters, and the next page.
 - [Playback and queue](./playback-queue.md) covers playing, the queue, repeat, shuffle, seeking, failures, resume, and the mini player.
+- [YouTube video on macOS](./video.md) covers topic browsing, video search and pagination, opening cards or URLs, music/video handoff, native rendering and window cleanup.
 - [AI-generated song filter](./ai-generated-filter.md) covers the setting,
   pre-play label lookup, skipping, auto-play, and hot reload.
 - [Lyrics](./lyrics.md) covers the sources in the order they are tried, word-synced and line-synced lyrics, the source and static modes, and seeking from a line.

@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
 	"github.com/elianiva/meiro/internal/keymap"
+	"github.com/elianiva/meiro/internal/video"
 	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/youtube"
 )
@@ -29,6 +31,7 @@ const (
 	routePlaylist
 	routeArtist
 	routePodcast
+	routeVideos
 )
 
 // loader reads a page's content. partial, when the loader can use it, shows
@@ -120,7 +123,7 @@ var routes []route
 func init() { routes = appRoutes() }
 
 func appRoutes() []route {
-	return []route{
+	all := []route{
 		{
 			id: routeHome, empty: emptyMessage{"Nothing to show yet", "YouTube Music returned an empty home page."}, pattern: "/home", title: "Home", rail: &railEntry{label: "Home", action: keymap.Home, icon: m3.IconHome, filled: m3.IconHomeFilled}, heading: greeting, nav: routeHome, source: "Home",
 			load: func(ctx context.Context, c *youtube.Client, _ string, _ func(*youtube.BrowseResult)) (*youtube.BrowseResult, error) {
@@ -183,6 +186,14 @@ func appRoutes() []route {
 			},
 		},
 	}
+	if video.Open != nil {
+		all = slices.Insert(all, 2, route{
+			id: routeVideos, pattern: "/youtube", title: "YouTube", heading: heading("YouTube"), nav: routeVideos, bare: true,
+			rail: &railEntry{label: "YouTube", icon: m3.IconPlay, filled: m3.IconPlay},
+			view: (*app).videoPage, open: (*app).openVideoBrowser,
+		})
+	}
+	return all
 }
 
 // notFound is the page of a path no route matches.

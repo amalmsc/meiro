@@ -548,6 +548,10 @@ func (a *app) retry() {
 // reloadPage loads the page shown again, bypassing the page cache.
 func (a *app) reloadPage() {
 	location := a.router.Location()
+	if location == "/youtube" {
+		a.findVideos(a.videos.request, a.videos.topic)
+		return
+	}
 	a.pages.Delete(location)
 	a.location = ""
 	a.onNavigate()

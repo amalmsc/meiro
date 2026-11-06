@@ -22,6 +22,7 @@ import (
 	"github.com/elianiva/meiro/internal/proc"
 	"github.com/elianiva/meiro/internal/report"
 	"github.com/elianiva/meiro/internal/settings"
+	"github.com/elianiva/meiro/internal/video"
 	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/player"
 	"github.com/elianiva/meiro/systemmedia"
@@ -130,9 +131,21 @@ type app struct {
 	detailSortOpen       bool
 	menu                 itemMenu
 
+	videoWindow   video.Window
+	watchingVideo bool
+	videos        videoBrowserState
+	videoPlayback video.Playback
+	videoReopen   bool
+	videoShutdown bool
+	videoStart    task
+	videoProgress *playbackProgressSync
+	// openVideo is replaced in tests, which never create a native window.
+	openVideo func(video.Playback, func(), func(video.Playback), func()) (video.Window, error)
+
 	// Dialogs.
 	crash          *crashState
 	toolHelp       *toolHelpState
+	videoDialog    *videoDialogState
 	newPlaylist    *newPlaylistState
 	deletePlaylist *deletePlaylistState
 	addToPlaylist  *addToPlaylistState

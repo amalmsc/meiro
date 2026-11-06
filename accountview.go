@@ -5,6 +5,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"github.com/elianiva/meiro/internal/video"
 	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/youtube"
 )
@@ -41,6 +42,14 @@ func (a *app) accountButton(c *ui.Context) {
 			})
 			ui.Divider(c)
 			a.channelItems(c, current)
+		}
+		if video.Open != nil && m3.MenuItem(c, "Open YouTube URL", m3.IconPlay).Clicked() {
+			a.menuOpen = false
+			if a.videoWindow != nil {
+				a.videoWindow.Focus()
+			} else {
+				a.videoDialog = &videoDialogState{open: true}
+			}
 		}
 		if m3.MenuItem(c, "Settings", m3.IconSettings).Clicked() {
 			a.menuOpen = false

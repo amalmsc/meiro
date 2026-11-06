@@ -10,10 +10,10 @@ import (
 	"github.com/elianiva/meiro/youtube"
 )
 
-// episodeProgressSync owns one account progress session. It is main-thread
+// playbackProgressSync owns one account progress session. It is main-thread
 // state; network requests capture its pointer and publish results through
 // app.update.
-type episodeProgressSync struct {
+type playbackProgressSync struct {
 	item         youtube.MusicItem
 	client       *youtube.Client
 	session      *youtube.PlaybackSession
@@ -21,12 +21,20 @@ type episodeProgressSync struct {
 	lastReported time.Duration
 	lastPosition time.Duration
 	lastSample   time.Time
-	pendingTo    time.Duration
 	seekVersion  uint64
-	pending      bool
+	pending      chan playbackProgressResult
 	finished     bool
 	finalSent    bool
 	finishAt     time.Duration
+}
+
+// Requests publish through a buffered channel as well as the UI callback, so
+// shutdown can finish an in-flight request after the window loop has stopped.
+type playbackProgressResult struct {
+	session     *youtube.PlaybackSession
+	err         error
+	to          time.Duration
+	seekVersion uint64
 }
 
 // episodeProgressInterval bounds how often the account receives a heartbeat.
@@ -77,48 +85,72 @@ func (a *app) beginEpisodeProgress(item youtube.MusicItem, position, duration ti
 	if a.episodeProgress != nil {
 		a.finishEpisodeProgress(false)
 	}
-	state := &episodeProgressSync{
+	a.episodeProgress = a.beginPlaybackProgress(item, position, duration, false)
+}
+
+// beginPlaybackProgress shares podcast and native-video tracking without
+// sharing the players or their current sessions.
+func (a *app) beginPlaybackProgress(item youtube.MusicItem, position, duration time.Duration, video bool) *playbackProgressSync {
+	state := &playbackProgressSync{
 		item: item, client: a.client(), duration: duration, lastReported: position,
-		lastPosition: position, lastSample: time.Now(), seekVersion: a.seekVersion,
-		pending: true,
+		lastPosition: position, lastSample: time.Now(),
 	}
-	a.episodeProgress = state
+	done := make(chan playbackProgressResult, 1)
+	state.pending = done
+	if !video {
+		state.seekVersion = a.seekVersion
+	}
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), episodeProgressTimeout)
 		defer cancel()
-		session, err := state.client.BeginEpisodePlayback(ctx, item.VideoID, position, duration)
-		a.update(func() {
-			state.pending = false
-			if err != nil {
-				log.Printf("playback: could not start episode progress video_id=%s: %v", item.VideoID, err)
-				if a.episodeProgress == state {
-					a.episodeProgress = nil
-				}
-				return
-			}
-			state.session = session
-			if state.finished {
-				a.sendEpisodeProgressFinal(state)
-				return
-			}
-			if a.episodeProgress != state {
-				return
-			}
-		})
+		begin := state.client.BeginEpisodePlayback
+		if video {
+			begin = state.client.BeginVideoPlayback
+		}
+		session, err := begin(ctx, item.VideoID, position, duration)
+		done <- playbackProgressResult{session: session, err: err, to: position}
+		a.update(func() { a.playbackProgressCompleted(state, done) })
 	})
+	return state
+}
+
+func completePlaybackProgress(state *playbackProgressSync, done chan playbackProgressResult) bool {
+	if state.pending != done {
+		return false
+	}
+	result := <-done
+	state.pending = nil
+	switch {
+	case result.err != nil:
+		log.Printf("playback: could not report progress video_id=%s: %v", state.item.VideoID, result.err)
+	case result.session != nil:
+		state.session = result.session
+	case result.seekVersion == state.seekVersion:
+		state.lastReported = result.to
+	}
+	return true
+}
+
+func (a *app) playbackProgressCompleted(state *playbackProgressSync, done chan playbackProgressResult) {
+	if completePlaybackProgress(state, done) && state.finished {
+		a.sendPlaybackProgressFinal(state)
+	}
 }
 
 // syncEpisodeProgress sends a watch-time interval after each 20 seconds of
 // actual playback. Position jumps and seeks reset its baseline, so skipped
 // audio is never attributed to the account.
 func (a *app) syncEpisodeProgress() {
-	state := a.episodeProgress
-	if state == nil || state.finished || state.session == nil || state.pending || !a.player.Playing() {
+	a.syncPlaybackProgress(a.episodeProgress, a.player.Position(), a.seekVersion, a.player.Playing())
+}
+
+func (a *app) syncPlaybackProgress(state *playbackProgressSync, position time.Duration, seekVersion uint64, playing bool) {
+	if state == nil || state.finished {
 		return
 	}
-	now, position := time.Now(), a.player.Position()
-	if state.seekVersion != a.seekVersion {
-		state.seekVersion = a.seekVersion
+	now := time.Now()
+	if state.seekVersion != seekVersion {
+		state.seekVersion = seekVersion
 		state.lastReported, state.lastPosition, state.lastSample = position, position, now
 		return
 	}
@@ -129,28 +161,21 @@ func (a *app) syncEpisodeProgress() {
 		state.lastReported = position
 		return
 	}
+	if !playing || state.session == nil || state.pending != nil {
+		return
+	}
 	if position-state.lastReported < episodeProgressInterval {
 		return
 	}
 	from, to := state.lastReported, position
-	state.pending = true
-	state.pendingTo = to
+	done := make(chan playbackProgressResult, 1)
+	state.pending = done
 	a.run(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), episodeProgressTimeout)
 		defer cancel()
 		err := state.session.ReportWatchtime(ctx, from, to, state.duration, "playing", false)
-		a.update(func() {
-			state.pending = false
-			state.pendingTo = 0
-			if err != nil {
-				log.Printf("playback: could not report episode progress video_id=%s: %v", state.item.VideoID, err)
-			} else {
-				state.lastReported = to
-			}
-			if state.finished {
-				a.sendEpisodeProgressFinal(state)
-			}
-		})
+		done <- playbackProgressResult{err: err, to: to, seekVersion: seekVersion}
+		a.update(func() { a.playbackProgressCompleted(state, done) })
 	})
 }
 
@@ -159,24 +184,26 @@ func (a *app) syncEpisodeProgress() {
 // is not lost when the window's update loop stops.
 func (a *app) finishEpisodeProgress(wait bool) {
 	state := a.episodeProgress
+	a.episodeProgress = nil
+	a.finishPlaybackProgress(state, a.playbackPosition(), wait)
+}
+
+func (a *app) finishPlaybackProgress(state *playbackProgressSync, position time.Duration, wait bool) {
 	if state == nil {
 		return
 	}
 	state.finished = true
-	state.finishAt = max(a.playbackPosition(), state.lastReported)
-	a.episodeProgress = nil
-	if state.session == nil || state.pending {
+	state.finishAt = max(position, state.lastReported)
+	if state.pending != nil {
 		if !wait {
 			return
 		}
+		completePlaybackProgress(state, state.pending)
 	}
 	if state.session == nil || state.finalSent {
 		return
 	}
 	from, to := state.lastReported, state.finishAt
-	if state.pending && state.session != nil {
-		from = max(from, state.pendingTo)
-	}
 	if to < from {
 		to = from
 	}
@@ -193,12 +220,12 @@ func (a *app) finishEpisodeProgress(wait bool) {
 		}
 		return
 	}
-	a.sendEpisodeProgressFinal(state)
+	a.sendPlaybackProgressFinal(state)
 }
 
-// sendEpisodeProgressFinal sends the final interval once, including when the
+// sendPlaybackProgressFinal sends the final interval once, including when the
 // session-start or heartbeat request completed after the episode was left.
-func (a *app) sendEpisodeProgressFinal(state *episodeProgressSync) {
+func (a *app) sendPlaybackProgressFinal(state *playbackProgressSync) {
 	if state.session == nil || state.finalSent {
 		return
 	}

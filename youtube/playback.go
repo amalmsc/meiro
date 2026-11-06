@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -173,33 +174,101 @@ func parseAudioStream(raw json.RawMessage) (string, time.Duration, error) {
 // plays through yt-dlp, so nothing else reports it. It needs a signed-in
 // session, and does nothing without one.
 func (c *Client) ReportPlayback(ctx context.Context, videoID string) error {
-	_, err := c.reportPlayback(ctx, videoID, 0, 0, false)
+	_, err := c.reportPlayback(ctx, videoID, 0, 0, false, musicClient)
 	return err
 }
 
-// PlaybackSession is YouTube's tracking session for one authenticated
-// podcast episode. Its nonce and watch-time URL must stay together: YouTube
-// drops progress pings that do not belong to the playback ping that started
-// the session.
+// PlaybackSession is YouTube's tracking session for one authenticated video
+// or podcast episode. Its nonce and watch-time URL must stay together: YouTube
+// drops progress pings that do not belong to the playback ping that started it.
 type PlaybackSession struct {
 	client       *Client
 	watchtimeURL *url.URL
 	cpn          string
 	startedAt    time.Time
+	identity     innerTubeClient
 }
 
 // BeginEpisodePlayback starts an authenticated tracking session for an
 // episode at position. ReportWatchtime sends intervals through this same
 // session so YouTube can update the account's episode progress.
 func (c *Client) BeginEpisodePlayback(ctx context.Context, videoID string, position, duration time.Duration) (*PlaybackSession, error) {
-	return c.reportPlayback(ctx, videoID, position, duration, true)
+	return c.reportPlayback(ctx, videoID, position, duration, true, musicClient)
 }
 
-func (c *Client) reportPlayback(ctx context.Context, videoID string, position, duration time.Duration, withWatchtime bool) (*PlaybackSession, error) {
+// BeginVideoPlayback starts authenticated WEB tracking for a regular YouTube
+// video. Signed-out clients and empty video IDs return a nil session without
+// making requests, just like BeginEpisodePlayback.
+func (c *Client) BeginVideoPlayback(ctx context.Context, videoID string, position, duration time.Duration) (*PlaybackSession, error) {
+	return c.videoPlaybackClient().reportPlayback(ctx, videoID, position, duration, true, webClient)
+}
+
+// videoPlaybackClient keeps the Music client unchanged, and retains explicit
+// local endpoints for tests. Do not copy Client: it contains a visitor mutex.
+func (c *Client) videoPlaybackClient() *Client {
+	base := c.baseURL
+	if base == defaultAPIURL {
+		base = "https://www.youtube.com"
+	}
+	return NewClient(Options{
+		HTTPClient: c.httpClient, BaseURL: base, APIKey: c.apiKey,
+		ClientVersion: c.clientVersion, WebClientVersion: c.webClientVersion,
+		VisitorData: c.currentVisitorData(), Language: c.language, Country: c.country,
+		CookieAuth: c.cookieAuth, AllowInsecureCookieAuth: c.allowInsecureCookieAuth,
+	})
+}
+
+// VideoProgress returns the signed-in WEB player's suggested starting position,
+// in seconds from the video's start. An absent playbackStartConfig/startSeconds
+// means no resume position (zero). Signed-out clients return zero without a
+// request; invalid IDs, failed requests and malformed responses return errors.
+func (c *Client) VideoProgress(ctx context.Context, videoID string) (time.Duration, error) {
+	if c.cookieAuth == nil {
+		return 0, nil
+	}
+	if strings.TrimSpace(videoID) == "" {
+		return 0, errors.New("youtube: video progress requires a video ID")
+	}
+	raw, err := c.videoPlaybackClient().executeAs(ctx, webClient, false, "player", map[string]any{
+		"videoId":         videoID,
+		"playbackContext": map[string]any{"contentPlaybackContext": map[string]any{}},
+	})
+	if err != nil {
+		return 0, err
+	}
+	var response struct {
+		PlayabilityStatus struct {
+			Status string `json:"status"`
+			Reason string `json:"reason"`
+		} `json:"playabilityStatus"`
+		PlayerConfig struct {
+			PlaybackStartConfig struct {
+				StartSeconds json.Number `json:"startSeconds"`
+			} `json:"playbackStartConfig"`
+		} `json:"playerConfig"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return 0, err
+	}
+	if status := response.PlayabilityStatus; status.Status != "" && status.Status != "OK" {
+		return 0, fmt.Errorf("youtube: player says %s: %s", status.Status, status.Reason)
+	}
+	start := response.PlayerConfig.PlaybackStartConfig.StartSeconds
+	if start == "" {
+		return 0, nil
+	}
+	seconds, err := start.Float64()
+	if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < 0 || seconds >= float64(math.MaxInt64)/float64(time.Second) {
+		return 0, errors.New("youtube: invalid video resume position")
+	}
+	return time.Duration(seconds * float64(time.Second)), nil
+}
+
+func (c *Client) reportPlayback(ctx context.Context, videoID string, position, duration time.Duration, withWatchtime bool, identity innerTubeClient) (*PlaybackSession, error) {
 	if c.cookieAuth == nil || strings.TrimSpace(videoID) == "" {
 		return nil, nil
 	}
-	raw, err := c.execute(ctx, "player", map[string]any{
+	raw, err := c.executeAs(ctx, identity, identity == musicClient, "player", map[string]any{
 		"videoId":         videoID,
 		"playbackContext": map[string]any{"contentPlaybackContext": map[string]any{}},
 	})
@@ -224,23 +293,26 @@ func (c *Client) reportPlayback(ctx context.Context, videoID string, position, d
 		"c":   {defaultMusicContext},
 		"cpn": {cpn},
 	}
+	if identity == webClient {
+		params.Set("c", string(webClient))
+	}
 	if withWatchtime {
 		params.Set("state", "playing")
 		params.Set("cmt", seconds(position))
 		params.Set("len", seconds(duration))
 		params.Set("rt", "0")
 	}
-	if err := c.pingTracking(ctx, playbackURL, params, "playback"); err != nil {
+	if err := c.pingTracking(ctx, playbackURL, params, "playback", identity); err != nil {
 		return nil, err
 	}
 	if !withWatchtime {
 		return nil, nil
 	}
-	return &PlaybackSession{client: c, watchtimeURL: watchtimeURL, cpn: cpn, startedAt: time.Now()}, nil
+	return &PlaybackSession{client: c, watchtimeURL: watchtimeURL, cpn: cpn, startedAt: time.Now(), identity: identity}, nil
 }
 
 // ReportWatchtime reports the newly played interval. Positions use seconds
-// from the episode's start; seeking is handled by starting a new interval at
+// from the video's start; seeking is handled by starting a new interval at
 // the position reached, never by reporting the skipped section.
 func (s *PlaybackSession) ReportWatchtime(ctx context.Context, from, to, duration time.Duration, state string, final bool) error {
 	if s == nil || s.client == nil || s.watchtimeURL == nil {
@@ -260,7 +332,10 @@ func (s *PlaybackSession) ReportWatchtime(ctx context.Context, from, to, duratio
 	if final {
 		params.Set("final", "1")
 	}
-	return s.client.pingTracking(ctx, s.watchtimeURL, params, "watchtime")
+	if s.identity == webClient {
+		params.Set("c", string(webClient))
+	}
+	return s.client.pingTracking(ctx, s.watchtimeURL, params, "watchtime", s.identity)
 }
 
 func trackingURL(root any, key string) (*url.URL, error) {
@@ -276,7 +351,7 @@ func trackingURL(root any, key string) (*url.URL, error) {
 	return target, nil
 }
 
-func (c *Client) pingTracking(ctx context.Context, target *url.URL, params url.Values, operation string) error {
+func (c *Client) pingTracking(ctx context.Context, target *url.URL, params url.Values, operation string, identity innerTubeClient) error {
 	if !c.allowInsecureCookieAuth && !isYouTubeURL(target) {
 		return errors.New("youtube: refusing to send cookie authentication to a non-YouTube or non-HTTPS URL")
 	}
@@ -298,6 +373,18 @@ func (c *Client) pingTracking(ctx context.Context, target *url.URL, params url.V
 	req.Header.Set("User-Agent", browserUserAgent)
 	req.Header.Set("Referer", "https://music.youtube.com/")
 	c.setIdentity(req, c.currentVisitorData())
+	if identity == webClient {
+		base, err := url.Parse(c.baseURL)
+		if err != nil {
+			return err
+		}
+		origin := base.Scheme + "://" + base.Host
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Referer", origin+"/")
+		if c.cookieAuth != nil {
+			req.Header.Set("Authorization", c.cookieAuth.authorization(time.Now(), origin))
+		}
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err

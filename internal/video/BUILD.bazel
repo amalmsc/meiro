@@ -1,0 +1,34 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "video",
+    srcs = [
+        "gpu_darwin.go",
+        "video.go",
+        "window_darwin.go",
+    ],
+    importpath = "github.com/elianiva/meiro/internal/video",
+    visibility = ["//:__subpackages__"],
+    deps = select({
+        "@rules_go//go/platform:darwin": [
+            "//internal/proc",
+            "@com_github_ebitengine_purego//:purego",
+            "@com_github_ebitengine_purego//objc",
+            "@com_github_egoist_mygo//:mygo",
+            "@com_github_egoist_mygo//ui",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+go_test(
+    name = "video_test",
+    srcs = ["window_darwin_test.go"],
+    embed = [":video"],
+    deps = select({
+        "@rules_go//go/platform:darwin": [
+            "@com_github_egoist_mygo//ui",
+        ],
+        "//conditions:default": [],
+    }),
+)

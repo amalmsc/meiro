@@ -42,6 +42,18 @@ type State struct {
 	// Episodes are the podcast episodes left part-way through, the one left
 	// last first. They outlive the queue they were heard from.
 	Episodes []Episode `json:"episodes,omitempty"`
+	// Video is the last native video, independent of the music queue.
+	Video *Video `json:"video,omitempty"`
+}
+
+// Video keeps the last video's position and whether its window should reopen.
+type Video struct {
+	URL      string        `json:"url"`
+	Title    string        `json:"title,omitempty"`
+	Channel  string        `json:"channel,omitempty"`
+	Position time.Duration `json:"position,omitempty"`
+	Duration time.Duration `json:"duration,omitempty"`
+	Open     bool          `json:"open,omitempty"`
 }
 
 // Episode is where listening to a podcast episode stopped.
@@ -84,9 +96,9 @@ func (s State) sanitize() State {
 		}
 	}
 	if s.Index < 0 || s.Index >= len(s.Items) || s.Items[s.Index].VideoID == "" {
-		return State{Episodes: episodes}
+		return State{Episodes: episodes, Video: s.Video}
 	}
-	out := State{Episodes: episodes}
+	out := State{Episodes: episodes, Video: s.Video}
 	out.RecStart = -1
 	for i, item := range s.Items {
 		if item.VideoID == "" {

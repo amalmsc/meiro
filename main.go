@@ -90,6 +90,7 @@ func main() {
 		// Background work reaches the window through the desktop, so it
 		// starts only once the window is there.
 		a.restoreAccount()
+		a.restoreVideo()
 		a.loadScrobbleSession()
 		a.loadHistory()
 		a.startTicker()
@@ -265,6 +266,15 @@ func (a *app) openAudioCache() {
 
 // shutdown flushes the settings, then closes what belongs to the app.
 func (a *app) shutdown() {
+	a.videos.load.stop()
+	a.videos.next.stop()
+	a.prepareVideoShutdown()
+	if win := a.videoWindow; win != nil {
+		win.Close()
+		win.Wait()
+		win.Release()
+		a.videoWindow = nil
+	}
 	a.aiCheck.stop()
 	a.notificationArtwork.stop()
 	a.finishEpisodeProgress(true)

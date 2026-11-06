@@ -72,6 +72,7 @@ func (a *app) view(c *ui.Context) {
 	a.deletePlaylistDialog(c)
 	a.addToPlaylistDialog(c)
 	a.toolHelpDialog(c)
+	a.openVideoDialog(c)
 	a.crashDialog(c)
 	m3.Snackbars(c, 0)
 	a.shortcuts(c)
@@ -255,6 +256,11 @@ func (a *app) topBar(c *ui.Context) {
 	compact := m3.Animate(topbar, "compact-header", compactTarget, m3.EffectsSlow)
 	topbar.Children(func() {
 		left := ui.Row(c).Width(topbarLeftBlock).Shrink(0).Gap(16).AlignItems(ui.Center)
+		if r.id == routeVideos {
+			// Video search needs room at the minimum window width; unlike
+			// music pages, this destination never carries a compact hero.
+			left.Width(140)
+		}
 		left.Children(func() {
 			if back {
 				if m3.IconButton(c, m3.IconButtonSpec{Icon: m3.IconArrowBack, Label: "Back", Key: "back"}).Clicked() {
@@ -281,8 +287,13 @@ func (a *app) topBar(c *ui.Context) {
 		ui.Spacer(c)
 		if r.bare {
 			// Settings has a local filter; Stats has no search entry point.
-			if r.id == routeSettings {
+			switch r.id {
+			case routeSettings:
 				a.settingsSearchBar(c)
+			case routeVideos:
+				a.videoSearchBar(c)
+				a.accountButton(c)
+			case routeNotFound, routeHome, routeExplore, routeLibrary, routeDownloads, routeSearch, routeStats, routeAlbum, routePlaylist, routeArtist, routePodcast:
 			}
 			return
 		}

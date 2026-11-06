@@ -351,6 +351,7 @@ func newTestApp(t testing.TB) *app {
 	a.betterLyrics = func(context.Context, betterlyrics.Query) ([]lyrics.Line, error) { return nil, nil }
 	a.account.newClient = newFakeClient
 	a.account.public = newFakeClient(nil)
+	a.videos.client = newFakeClient(nil)
 	return a
 }
 
