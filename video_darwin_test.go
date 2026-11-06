@@ -189,6 +189,8 @@ func TestInvalidVideoLinkLeavesMusicPlaying(t *testing.T) {
 func videoBrowserApp(t *testing.T) (*app, *bool) {
 	t.Helper()
 	a := newTestApp(t)
+	// Player tests start from a public search, not an account's home feed.
+	a.videos.request = "popular videos"
 	failMore := false
 	a.videos.client = youtube.NewClient(youtube.Options{HTTPClient: &http.Client{Transport: artworkTransport(func(r *http.Request) (*http.Response, error) {
 		var body struct{ Query, Continuation string }
@@ -257,11 +259,8 @@ func TestBrowseSearchAndWatchVideos(t *testing.T) {
 	if !tt.HasText("popular videos video") {
 		t.Fatal(tt.Texts())
 	}
-	click("Science")
-	if !tt.HasText("science documentary video") {
-		t.Fatal(tt.Texts())
-	}
 	click("Search YouTube videos")
+	tt.Key(ui.Cmd, ui.KeyA)
 	tt.Type("golang")
 	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
@@ -300,8 +299,8 @@ func TestBrowseSearchAndWatchVideos(t *testing.T) {
 			t.Fatal(tt.Texts())
 		}
 	}
-	click("Discover")
-	if !tt.HasText("popular videos video") {
+	click("For you")
+	if !tt.HasText("Sign in for recommendations") {
 		t.Fatal(tt.Texts())
 	}
 }
@@ -634,16 +633,124 @@ func TestVideoSearchDiscardsSupersededResults(t *testing.T) {
 	a.router.Push("/youtube")
 	tt := ui.NewTester(a.view, 1000, 700)
 	tt.Frame()
-	if err := tt.Click("Gaming"); err != nil {
+	if err := tt.Click("Search YouTube videos"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("gaming")
+	tt.Key(0, ui.KeyEnter)
 	tt.Frame()
-	// The latest response arrives first; the previous topic must not replace it.
+	// The latest response arrives first; the previous search must not replace it.
 	for i := len(work) - 1; i >= 0; i-- {
 		work[i]()
 	}
 	tt.Frame()
 	if !tt.HasText("gaming video") || tt.HasText("popular videos video") {
 		t.Fatal(tt.Texts())
+	}
+}
+
+func TestVideoRecommendationsFollowSelectedProfile(t *testing.T) {
+	resetFakes()
+	a := signedInApp(t)
+	a.account.session.channels = []youtube.AccountChannel{
+		{Name: "Personal", Selected: true},
+		{Name: "Brand channel", ChannelID: "UC-brand"},
+	}
+	searchApp, _ := videoBrowserApp(t)
+	a.videos.client = searchApp.videos.client
+	tt := open(a, "/youtube")
+	click := func(label string) {
+		t.Helper()
+		if err := tt.Click(label); err != nil {
+			t.Fatal(err)
+		}
+		tt.Frame()
+	}
+	mustShow(t, tt, "For you", "Personal recommendation")
+	for _, label := range []string{"Discover", "Science", "Technology", "Gaming", "Travel", "Cooking"} {
+		if tt.HasText(label) {
+			t.Fatalf("removed topic still visible: %s", label)
+		}
+	}
+	click("More videos")
+	if len(a.videos.items) != 2 {
+		t.Fatalf("home pagination lost or duplicated results: %+v", a.videos.items)
+	}
+	mustShow(t, tt, "Personal next recommendation")
+	click("Account")
+	click("Brand channel")
+	mustShow(t, tt, "UC-brand recommendation")
+	if tt.HasText("Personal recommendation") || tt.HasText("Personal next recommendation") {
+		t.Fatal("switching profile kept the previous profile's feed")
+	}
+	click("Search YouTube videos")
+	tt.Type("golang")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	mustShow(t, tt, "golang video")
+	click("For you")
+	mustShow(t, tt, "UC-brand recommendation")
+	if a.videos.query != "" {
+		t.Fatal("returning home retained the search text")
+	}
+	// Hold a continuation across sign-out: its late result must not restore
+	// private recommendations or its old pagination token.
+	inline := a.run
+	var pending []func()
+	a.run = func(work func()) { pending = append(pending, work) }
+	click("More videos")
+	click("Account")
+	click("Sign out")
+	a.run = inline
+	for _, work := range pending {
+		work()
+	}
+	tt.Frame()
+	mustShow(t, tt, "Sign in for recommendations")
+	if len(a.videos.items) != 0 || a.videos.more != "" || tt.HasText("UC-brand next recommendation") {
+		t.Fatal("signed-out page exposed the previous profile's recommendations")
+	}
+	click("Search YouTube videos")
+	tt.Type("public")
+	tt.Key(0, ui.KeyEnter)
+	tt.Frame()
+	mustShow(t, tt, "public video")
+}
+
+func TestVideoHomeRetryAndStaleProfileResults(t *testing.T) {
+	resetFakes()
+	s := &switchable{mode: "offline"}
+	a := stateApp(t, s, true)
+	tt := open(a, "/youtube")
+	mustShow(t, tt, "Could not load videos")
+	s.mode = ""
+	if err := tt.Click("Retry"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	mustShow(t, tt, "Personal recommendation")
+	// A restored/switching account may finish while the previous home request
+	// is in flight. Deliver that old response after the new profile's feed.
+	inline := a.run
+	var pending []func()
+	a.run = func(work func()) { pending = append(pending, work) }
+	if err := tt.Click("Refresh videos"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	a.run = inline
+	auth, err := youtube.NewCookieAuth("SAPISID=test", youtube.CookieOptions{AccountIndex: 1, OnBehalfOfUser: "UC-other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.useSession(&session{client: a.account.newClient(auth), cookie: "SAPISID=test", channel: "UC-other", accountIndex: 1}, sessionSource{})
+	for _, work := range pending {
+		work()
+	}
+	tt.Frame()
+	mustShow(t, tt, "UC-other recommendation")
+	if tt.HasText("Personal recommendation") {
+		t.Fatal("old home response replaced the current profile's feed")
 	}
 }

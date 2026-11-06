@@ -11,54 +11,60 @@ import (
 	"github.com/elianiva/meiro/youtube"
 )
 
-// Video browsing has its own signed-out WEB client and search state. Neither
-// music credentials nor music search filters are sent to regular YouTube.
+// Search uses a public WEB client. The home feed uses the selected account's
+// client, independently of music browsing and search state.
 type videoBrowserState struct {
-	client                *youtube.Client
-	query, request, topic string
-	items                 []youtube.VideoItem
-	more, err, moreErr    string
-	loading               bool
-	load, next            task
-	grid                  ui.GridState
-}
-
-var videoTopics = []struct{ label, query string }{
-	{"Discover", "popular videos"},
-	{"Science", "science documentary"},
-	{"Technology", "technology"},
-	{"Gaming", "gaming"},
-	{"Travel", "travel documentary"},
-	{"Cooking", "cooking"},
+	client             *youtube.Client
+	query, request     string
+	items              []youtube.VideoItem
+	more, err, moreErr string
+	initialized        bool
+	loading            bool
+	load, next         task
+	grid               ui.GridState
 }
 
 func (a *app) openVideoBrowser() {
 	if a.videos.client == nil {
 		a.videos.client = youtube.NewClient(youtube.Options{BaseURL: "https://www.youtube.com"})
 	}
-	if a.videos.request == "" {
-		a.browseVideoTopic(videoTopics[0].label, videoTopics[0].query)
+	if !a.videos.initialized {
+		a.findVideos(a.videos.request)
 	}
 }
 
-func (a *app) browseVideoTopic(label, query string) {
-	a.videos.query = ""
-	a.findVideos(query, label)
-}
-
-func (a *app) findVideos(query, topic string) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		a.browseVideoTopic(videoTopics[0].label, videoTopics[0].query)
-		return
-	}
+func (a *app) resetVideoBrowser() {
 	s := &a.videos
+	s.load.stop()
 	s.next.stop()
-	s.request, s.topic = query, topic
+	s.initialized, s.loading = false, false
+	s.query, s.request = "", ""
+	s.items, s.more, s.err, s.moreErr = nil, "", "", ""
+	if r, _ := a.route(); r.id == routeVideos {
+		a.openVideoBrowser()
+	}
+}
+
+func (a *app) findVideos(query string) {
+	query = strings.TrimSpace(query)
+	s := &a.videos
+	s.load.stop()
+	s.next.stop()
+	s.request, s.query, s.initialized = query, query, true
 	s.items, s.more, s.err, s.moreErr, s.loading = nil, "", "", "", true
 	s.grid.ScrollTo(0, ui.Start)
 	client := s.client
+	if query == "" {
+		if !a.signedIn() {
+			s.loading = false
+			return
+		}
+		client = a.client()
+	}
 	startTask(a, &s.load, searchTimeout, func(ctx context.Context) (*youtube.VideoResult, error) {
+		if query == "" {
+			return client.GetVideoHome(ctx)
+		}
 		return client.SearchVideos(ctx, query)
 	}, func(result *youtube.VideoResult, err error) {
 		s.loading = false
@@ -79,8 +85,15 @@ func (a *app) moreVideos() {
 		return
 	}
 	token, client := s.more, s.client
+	home := s.request == ""
+	if home {
+		client = a.client()
+	}
 	s.moreErr = ""
 	startTask(a, &s.next, searchTimeout, func(ctx context.Context) (*youtube.VideoResult, error) {
+		if home {
+			return client.ContinueVideoHome(ctx, token)
+		}
 		return client.ContinueVideos(ctx, token)
 	}, func(result *youtube.VideoResult, err error) {
 		if err != nil {
@@ -110,9 +123,9 @@ func (a *app) videoSearchBar(c *ui.Context) {
 		Height: 48, MaxWidth: 520, Container: searchTint(c),
 	})
 	if result.Submitted {
-		a.findVideos(a.videos.query, "")
+		a.findVideos(a.videos.query)
 	} else if result.Cleared {
-		a.browseVideoTopic(videoTopics[0].label, videoTopics[0].query)
+		a.findVideos("")
 	}
 }
 
@@ -120,26 +133,35 @@ func (a *app) videoPage(c *ui.Context) {
 	s, sc := &a.videos, m3.Of(c).Scheme
 	ui.Column(c).Fill().Children(func() {
 		ui.Row(c).FillWidth().Wrap().Padding(8, pageGutter).Gap(8).AlignItems(ui.Center).Children(func() {
-			for _, topic := range videoTopics {
-				if m3.Chip(c, topic.label, s.topic == topic.label, "video-topic-"+topic.label).Clicked() {
-					a.browseVideoTopic(topic.label, topic.query)
-				}
+			if m3.Chip(c, "For you", s.request == "", "video-home").Clicked() {
+				a.findVideos("")
 			}
 			if m3.IconButton(c, m3.IconButtonSpec{Icon: m3.IconRefresh, Label: "Refresh videos", Key: "refresh-videos"}).Clicked() {
-				a.findVideos(s.request, s.topic)
+				a.findVideos(s.request)
 			}
 		})
-		m3.Text(c, m3.BodyMedium, "Browse topics or search all of YouTube. Click a video to watch.").TextColor(sc.OnSurfaceVariant).Padding(0, pageGutter, 12)
+		caption := "Search all of YouTube. Click a video to watch."
+		if s.request == "" && a.signedIn() {
+			caption = "YouTube recommendations for your selected profile."
+			if name := a.account.session.details.Name; name != "" {
+				caption = "YouTube recommendations for " + name + "."
+			}
+		}
+		m3.Text(c, m3.BodyMedium, caption).TextColor(sc.OnSurfaceVariant).Padding(0, pageGutter, 12)
 		switch {
+		case s.request == "" && !a.signedIn():
+			a.message(c, m3.IconLogin, "Sign in for recommendations", "Use your selected YouTube profile for a personal feed, or search for videos without signing in.", "Sign in", a.openSignIn)
 		case s.loading:
 			ui.Column(c).Grow(1).FillWidth().Center().Gap(12).Children(func() {
 				m3.LoadingIndicator(c, 48, false)
 				m3.Text(c, m3.BodyMedium, "Finding videos…")
 			})
 		case s.err != "":
-			a.message(c, m3.IconError, "Could not load videos", s.err, "Retry", func() { a.findVideos(s.request, s.topic) })
+			a.message(c, m3.IconError, "Could not load videos", s.err, "Retry", func() { a.findVideos(s.request) })
+		case s.request == "" && len(s.items) == 0:
+			a.message(c, m3.IconPlay, "No recommendations yet", "YouTube returned no videos for this profile. Try refreshing, or search for a video.", "", nil)
 		case len(s.items) == 0:
-			a.message(c, m3.IconSearch, "No videos found", "Try another search or browse a topic.", "", nil)
+			a.message(c, m3.IconSearch, "No videos found", "Try another search or return to For you.", "", nil)
 		default:
 			items := s.items
 			s.grid.Key = func(i int) any { return items[i].ID }

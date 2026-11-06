@@ -101,6 +101,8 @@ func (fakeMusic) RoundTrip(request *http.Request) (*http.Response, error) {
 	case webNext:
 		aiChecks.Add(1)
 		reply = webNextResponse(nextVideoID(asked))
+	case request.Header.Get("X-YouTube-Client-Name") == "1" && strings.HasSuffix(request.URL.Path, "/browse") && (strings.Contains(asked, "FEwhat_to_watch") || strings.Contains(asked, "video-home-")):
+		reply = videoHomeResponse(request.Header.Get("X-Goog-PageId"), strings.Contains(asked, `"continuation"`))
 	case strings.HasSuffix(request.URL.Path, "/like/like"), strings.HasSuffix(request.URL.Path, "/like/dislike"), strings.HasSuffix(request.URL.Path, "/like/removelike"):
 		likeWrites.Add(1)
 		recordWrite(request.URL.Path, asked)
@@ -294,6 +296,20 @@ func webNextResponse(videoID string) string {
 	]}}}},"related":{"videoRenderer":{"title":{"runs":[{"text":"Related AI"}]},"badges":[
 		{"metadataBadgeRenderer":{"icon":{"iconType":"INFO"},"style":"BADGE_STYLE_TYPE_SIMPLE","label":"AI","accessibilityData":{"label":"AI: Content was made with AI"}}}
 	]}}}`, badges)
+}
+
+// videoHomeResponse keeps channel feeds distinct, including their pagination.
+func videoHomeResponse(channel string, more bool) string {
+	if channel == "" {
+		channel = "Personal"
+	}
+	item := fmt.Sprintf(`{"richItemRenderer":{"content":{"videoRenderer":{"videoId":%q,"title":{"simpleText":%q},"ownerText":{"simpleText":"Example channel"},"lengthText":{"simpleText":"12:34"},"viewCountText":{"simpleText":"1,234 views"}}}}}`, channel+"-one", channel+" recommendation")
+	if more {
+		next := fmt.Sprintf(`{"richItemRenderer":{"content":{"videoRenderer":{"videoId":%q,"title":{"simpleText":%q}}}}}`, channel+"-two", channel+" next recommendation")
+		return `{"onResponseReceivedActions":[{"appendContinuationItemsAction":{"targetId":"browse-feedFEwhat_to_watch","continuationItems":[` + item + `,` + next + `]}}]}`
+	}
+	token := fmt.Sprintf(`{"continuationItemRenderer":{"continuationEndpoint":{"continuationCommand":{"token":%q}}}}`, "video-home-"+channel)
+	return `{"contents":{"twoColumnBrowseResultsRenderer":{"tabs":[{"tabRenderer":{"selected":true,"content":{"richGridRenderer":{"contents":[` + item + `,` + token + `]}}}}]}}}`
 }
 
 // episodeNextResponse is what YouTube answers for the episode ep-1 in the

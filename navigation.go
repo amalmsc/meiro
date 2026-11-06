@@ -549,7 +549,7 @@ func (a *app) retry() {
 func (a *app) reloadPage() {
 	location := a.router.Location()
 	if location == "/youtube" {
-		a.findVideos(a.videos.request, a.videos.topic)
+		a.findVideos(a.videos.request)
 		return
 	}
 	a.pages.Delete(location)
