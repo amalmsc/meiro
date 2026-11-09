@@ -286,7 +286,11 @@ func (a *app) lyricsView(c *ui.Context, follow *lyricsFollow, scroll *ui.ScrollS
 // under each timed line. The reading is asked for only when it is turned on.
 func (a *app) lyricReading(c *ui.Context) {
 	sc := m3.Of(c).Scheme
-	ui.Row(c).Padding(0, 16, 4).Gap(18).AlignItems(ui.Center).Children(func() {
+	row := ui.Row(c).Padding(0, 16, 4).Gap(18).AlignItems(ui.Center)
+	if a.nowPlaying.floatingOpen {
+		a.markFloatingHit(row)
+	}
+	row.Children(func() {
 		on := a.settings.LyricRomanization
 		if m3.CompactSwitch(c, &on, "Romanization").Tooltip("Romanization").Changed() {
 			a.settings.LyricRomanization = on
@@ -315,7 +319,11 @@ func (a *app) lyricReading(c *ui.Context) {
 func (a *app) lyricsModes(c *ui.Context, synced bool) {
 	sc := m3.Of(c).Scheme
 	l := &a.nowPlaying.lyrics
-	ui.Row(c).Padding(0, 16, 0).Gap(18).AlignItems(ui.Center).Children(func() {
+	row := ui.Row(c).Padding(0, 16, 0).Gap(18).AlignItems(ui.Center)
+	if a.nowPlaying.floatingOpen {
+		a.markFloatingHit(row)
+	}
+	row.Children(func() {
 		// The clock stands for the timing the switch turns on, so that the row
 		// needs no words of its own.
 		ui.Icon(c, m3.IconSchedule).FontSize(18).TextColor(sc.OnSurfaceVariant)
@@ -379,7 +387,9 @@ const lyricFade = 48
 // syncedLyrics lists the lines, lights the one being sung and glides it to
 // the middle as the song moves on. A line is dimmer and smaller the further it
 // is from the one sung, and all of that eases rather than snaps. A line is a
-// click away: it seeks.
+// click away: it seeks. In the floating window only the lyric text passes
+// the click through, so the window behind the panel can take it. The
+// switches and source button above the lines still take the click.
 func (a *app) syncedLyrics(c *ui.Context, follow *lyricsFollow, scroll *ui.ScrollState, surface ui.Color) {
 	sc := m3.Of(c).Scheme
 	l := &a.nowPlaying.lyrics
@@ -493,15 +503,20 @@ func (a *app) lyricLine(c *ui.Context, line lyrics.Line, at time.Duration, i, no
 	if i == now {
 		lit = sc.Primary
 	}
+	floating := l == &a.nowPlaying.floatingFollow
 	row := ui.ButtonBase(c.Key(i)).FillWidth().Padding(8, 14).Radius(m3.Large).Justify(ui.Start).
-		Cursor(ui.CursorPointer).Label(text)
+		Label(text)
+	if floating {
+		// The line is drawn, not a control: a click on it reaches the window
+		// behind the panel, the way a click on the empty glass does.
+		row.PassThrough()
+	} else {
+		row.Cursor(ui.CursorPointer)
+	}
 	row.Background(m3.StateFill(ui.Transparent, lit, row.Hovered(), row.Pressed(), row.FocusVisible()))
 	opacity = m3.Animate(row, "opacity", opacity, m3.EffectsDefault)
 	size = m3.Animate(row, "size", size, m3.EffectsSlow)
 	row.Opacity(opacity).TransformOrigin(0, 0.5).Scale(size, size)
-	if a.nowPlaying.floatingOpen {
-		a.markFloatingHit(row)
-	}
 	row.Children(func() {
 		ui.Column(c).FillWidth().Gap(2).Children(func() {
 			if len(line.Words) > 0 {
@@ -512,7 +527,7 @@ func (a *app) lyricLine(c *ui.Context, line lyrics.Line, at time.Duration, i, no
 			a.lyricReadingLines(c, line, i, lit)
 		})
 	})
-	if row.Clicked() {
+	if !floating && row.Clicked() {
 		a.seek(line.At)
 	}
 	if i == now && l.centerPending {

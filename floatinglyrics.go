@@ -180,9 +180,9 @@ func (a *app) floatingLyricsView(c *ui.Context) {
 	a.lyricsSourceDialog(c)
 }
 
-// followFloatingPointer lets clicks on empty glass reach the window behind
-// the panel. Buttons, sliders, tabs and lyric lines keep the pointer, and the
-// native title bar stays available for dragging.
+// followFloatingPointer lets clicks on empty glass and on the lyric text
+// reach the window behind the panel. Buttons, switches, sliders and tabs
+// keep the pointer, and the native title bar stays available for dragging.
 func (a *app) followFloatingPointer(w *mygo.Window) {
 	a.every(50*time.Millisecond, func() {
 		if a.desktop == nil || a.desktop.floatingLyrics.Load() != w {

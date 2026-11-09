@@ -273,12 +273,36 @@ func TestFloatingLyricsFollowPlaybackIndependently(t *testing.T) {
 	}
 	floating.SetSize(480, 420)
 	floating.Frame()
+	before := a.seekVersion
 	if err := floating.Click(a.current.Title + " chorus"); err != nil {
 		t.Fatal(err)
 	}
 	floating.Frame()
-	if got := a.seekTarget; got != 10*time.Second {
-		t.Fatalf("clicking a floating line requested %s", got)
+	if a.seekVersion != before {
+		t.Fatalf("clicking a floating line sought to %s", a.seekTarget)
+	}
+	line, ok := floating.Find(a.current.Title + " chorus")
+	if !ok {
+		t.Fatal("floating lyric line is missing")
+	}
+	if floatingPointerHitsControl(a, line.X+line.W/2, line.Y+line.H/2) {
+		t.Fatal("a floating lyric line keeps the pointer")
+	}
+	for _, label := range []string{"Synced lyrics", "Romanization", "Translation", "Where these lyrics come from"} {
+		control, ok := floating.Find(label)
+		if !ok {
+			t.Fatalf("floating lyrics lack %q", label)
+		}
+		if !floatingPointerHitsControl(a, control.X+control.W/2, control.Y+control.H/2) {
+			t.Fatalf("%s passes the pointer through", label)
+		}
+	}
+	if err := main.Click(a.current.Title + " chorus"); err != nil {
+		t.Fatal(err)
+	}
+	main.Frame()
+	if a.seekTarget != 10*time.Second {
+		t.Fatalf("clicking a line in the player requested %s", a.seekTarget)
 	}
 	if floating.HasText("Volume") || floating.HasText("Position") {
 		t.Fatal("extra controls should start collapsed")
@@ -471,4 +495,16 @@ func TestFloatingLyricsLeaveGlassVisibleWithoutFadingText(t *testing.T) {
 			}
 		})
 	}
+}
+
+// floatingPointerHitsControl reports whether the floating window keeps a
+// click at x, y, in the window's own coordinates. Lyric text must not; the
+// switches and buttons above it must.
+func floatingPointerHitsControl(a *app, x, y float32) bool {
+	for _, bounds := range a.nowPlaying.floatingHit {
+		if expandHit(bounds, 8).Contains(x, y) {
+			return true
+		}
+	}
+	return false
 }
