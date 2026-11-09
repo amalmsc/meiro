@@ -76,6 +76,9 @@ func (a *app) songRow(c *ui.Context, item youtube.MusicItem, queue []youtube.Mus
 		height, artSize, gap, artPixels = 120, 96, 16, 256
 	}
 	row := ui.Row(c.Key(key))
+	if a.nowPlaying.floatingOpen {
+		a.markFloatingHit(row)
+	}
 	row.Height(height).Shrink(0).Padding(padding, 8).Gap(4).AlignItems(ui.Center).Radius(m3.Large)
 	if o.inset {
 		row.Margin(0, pageGutter-8)

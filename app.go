@@ -190,6 +190,8 @@ type app struct {
 	// settings.
 	eqDebounce task
 
+	// lyricTranslation asks for an English reading of the lines showing.
+	lyricTranslation func(ctx context.Context, videoID string, lines []string) ([]betterlyrics.Translation, error)
 	// betterLyrics finds a track's lyrics on Better Lyrics, which times each
 	// word; tests replace it.
 	betterLyrics func(ctx context.Context, q betterlyrics.Query) ([]lyrics.Line, error)
@@ -239,7 +241,9 @@ func newApp() *app {
 		return youtube.NewClient(youtube.Options{CookieAuth: auth})
 	}, cookies.Sources)
 	a.thumbs = artwork.New(&http.Client{Timeout: 30 * time.Second}, a.refresh)
-	a.betterLyrics = new(betterlyrics.Client).Get
+	client := new(betterlyrics.Client)
+	a.betterLyrics = client.Get
+	a.lyricTranslation = client.Translate
 	a.lyricsSource = new(lrclib.Client).Get
 	a.collectInfo = report.Collect
 	return a

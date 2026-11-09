@@ -11,6 +11,7 @@ import (
 	"github.com/elianiva/meiro/internal/betterlyrics"
 	"github.com/elianiva/meiro/internal/lrclib"
 	"github.com/elianiva/meiro/internal/lyrics"
+	"github.com/elianiva/meiro/internal/romanize"
 	"github.com/elianiva/meiro/m3"
 	"github.com/elianiva/meiro/youtube"
 )
@@ -29,6 +30,10 @@ type lyricsState struct {
 	synced []lyrics.Line
 	footer string
 	err    string
+	// translation is the English reading of synced, when it was asked for.
+	translation    []string
+	translatedFor  string
+	translationErr string
 	lyricsFollow
 	// explain is whether the dialog about the source of the lyrics is open.
 	explain bool
@@ -65,6 +70,7 @@ func (a *app) loadLyrics() {
 	// lookup is made again, so the lyrics do not blink back to loading.
 	if again := l.videoID == id; !again {
 		l.text, l.footer, l.err, l.synced, l.followed = "", "", "", nil, -1
+		l.translation, l.translatedFor, l.translationErr = nil, "", ""
 		a.nowPlaying.lyricsScroll.Y = 0
 		l.centerPending, l.settled = false, false
 		a.nowPlaying.floatingFollow = lyricsFollow{followed: -1}
@@ -83,6 +89,9 @@ func (a *app) loadLyrics() {
 		return findLyrics(ctx, sources, client, item, total)
 	}, func(found loadedLyrics, err error) {
 		l.text, l.footer, l.synced = found.text, found.footer, found.synced
+		if a.settings.LyricRomanization || a.settings.LyricTranslation {
+			a.loadLyricTranslation()
+		}
 		switch {
 		case l.text != "" || len(l.synced) > 0:
 		case err != nil:
@@ -187,6 +196,55 @@ func findLyrics(ctx context.Context, sources lyricSources, client *youtube.Clien
 // lyricsSource finds the lyrics LRCLIB has of a track.
 type lyricsSource func(ctx context.Context, q lrclib.Query) (*lrclib.Lyrics, error)
 
+// loadLyricTranslation asks Unison for a Latin-letter reading and an English
+// translation of the lines showing. A romanization already supplied with the
+// lyrics is kept. The request runs when either reading is turned on.
+func (a *app) loadLyricTranslation() {
+	l := &a.nowPlaying.lyrics
+	if len(l.synced) == 0 || l.translatedFor == l.videoID || !a.settings.LyricRomanization && !a.settings.LyricTranslation {
+		return
+	}
+	if a.lyricTranslation == nil {
+		for i := range l.synced {
+			if l.synced[i].Romanization == "" {
+				l.synced[i].Romanization = romanize.Line(l.synced[i].Text)
+			}
+		}
+		l.translatedFor = l.videoID
+		return
+	}
+	lines := make([]string, len(l.synced))
+	for i, line := range l.synced {
+		lines[i] = line.Text
+	}
+	id := l.videoID
+	l.translationErr = ""
+	startTask(a, &l.load, panelTimeout, func(ctx context.Context) ([]betterlyrics.Translation, error) {
+		return a.lyricTranslation(ctx, id, lines)
+	}, func(got []betterlyrics.Translation, err error) {
+		if l.videoID != id {
+			return
+		}
+		if err != nil {
+			l.translationErr = "Couldn't translate these lyrics."
+			return
+		}
+		l.translatedFor = id
+		l.translation = make([]string, len(l.synced))
+		for i := range l.synced {
+			if i < len(got) {
+				l.translation[i] = got[i].Text
+				if got[i].Romanization != "" {
+					l.synced[i].Romanization = got[i].Romanization
+				}
+			}
+			if l.synced[i].Romanization == "" {
+				l.synced[i].Romanization = romanize.Line(l.synced[i].Text)
+			}
+		}
+	})
+}
+
 // lyricsView shows the lyrics of the track playing: timed, with the line
 // being sung lit and followed, or as plain text. The user chooses between
 // the two when the track has both.
@@ -205,6 +263,7 @@ func (a *app) lyricsView(c *ui.Context, follow *lyricsFollow, scroll *ui.ScrollS
 			a.lyricsModes(c, synced)
 		}
 		if synced {
+			a.lyricReading(c)
 			a.syncedLyrics(c, follow, scroll, surface)
 			return
 		}
@@ -223,6 +282,36 @@ func (a *app) lyricsView(c *ui.Context, follow *lyricsFollow, scroll *ui.ScrollS
 
 // lyricsModes is the row above the lyrics: the switch between timed lines and
 // plain words, and the button that says where the words came from.
+// lyricReading is the choice to show a romanization and an English reading
+// under each timed line. The reading is asked for only when it is turned on.
+func (a *app) lyricReading(c *ui.Context) {
+	sc := m3.Of(c).Scheme
+	ui.Row(c).Padding(0, 16, 4).Gap(18).AlignItems(ui.Center).Children(func() {
+		on := a.settings.LyricRomanization
+		if m3.CompactSwitch(c, &on, "Romanization").Tooltip("Romanization").Changed() {
+			a.settings.LyricRomanization = on
+			a.saveSettings()
+			if on {
+				a.loadLyricTranslation()
+			}
+		}
+		on = a.settings.LyricTranslation
+		if m3.CompactSwitch(c, &on, "Translation").Tooltip("English translation").Changed() {
+			a.settings.LyricTranslation = on
+			a.saveSettings()
+			if on {
+				a.loadLyricTranslation()
+			}
+		}
+		if a.settings.LyricRomanization && !lyricHasRomanization(a.nowPlaying.lyrics.synced) {
+			m3.Text(c, m3.BodySmall, "No romanization for this song.").TextColor(sc.OnSurfaceVariant)
+		}
+		if a.settings.LyricTranslation && a.nowPlaying.lyrics.translationErr != "" {
+			m3.Text(c, m3.BodySmall, a.nowPlaying.lyrics.translationErr).TextColor(sc.Error)
+		}
+	})
+}
+
 func (a *app) lyricsModes(c *ui.Context, synced bool) {
 	sc := m3.Of(c).Scheme
 	l := &a.nowPlaying.lyrics
@@ -332,6 +421,29 @@ func (a *app) syncedLyrics(c *ui.Context, follow *lyricsFollow, scroll *ui.Scrol
 	})
 }
 
+// lyricReadingLines shows the optional romanization and English reading
+// under a timed line. They are smaller than the sung words and never replace them.
+func (a *app) lyricReadingLines(c *ui.Context, line lyrics.Line, i int, lit ui.Color) {
+	reading := line.Romanization
+	if !a.settings.LyricRomanization || reading == "" || reading == line.Text {
+		reading = ""
+	}
+	var translation string
+	if a.settings.LyricTranslation && i < len(a.nowPlaying.lyrics.translation) {
+		translation = a.nowPlaying.lyrics.translation[i]
+	}
+	if reading == "" && translation == "" {
+		return
+	}
+	dim := lit.Alpha(0.72)
+	if reading != "" {
+		m3.Text(c, m3.BodyMedium, reading).TextColor(dim).LineHeight(1.3)
+	}
+	if translation != "" {
+		m3.Text(c, m3.BodyMedium, translation).TextColor(dim).LineHeight(1.3)
+	}
+}
+
 // lyricLook is a line's opacity and size, as a fraction of the sung line's,
 // by its distance from it: the sung line is full, its neighbours are dim and
 // smaller, and the rest fade quickly into the background while staying
@@ -387,12 +499,18 @@ func (a *app) lyricLine(c *ui.Context, line lyrics.Line, at time.Duration, i, no
 	opacity = m3.Animate(row, "opacity", opacity, m3.EffectsDefault)
 	size = m3.Animate(row, "size", size, m3.EffectsSlow)
 	row.Opacity(opacity).TransformOrigin(0, 0.5).Scale(size, size)
+	if a.nowPlaying.floatingOpen {
+		a.markFloatingHit(row)
+	}
 	row.Children(func() {
-		if len(line.Words) > 0 {
-			m3.EmphasizedRichText(c, m3.HeadlineSmall, lyricWords(line, at, lit)...).FontWeight(800).LineHeight(1.25)
-			return
-		}
-		m3.EmphasizedText(c, m3.HeadlineSmall, text).FontWeight(800).TextColor(lit).LineHeight(1.25)
+		ui.Column(c).FillWidth().Gap(2).Children(func() {
+			if len(line.Words) > 0 {
+				m3.EmphasizedRichText(c, m3.HeadlineSmall, lyricWords(line, at, lit)...).FontWeight(800).LineHeight(1.25)
+			} else {
+				m3.EmphasizedText(c, m3.HeadlineSmall, text).FontWeight(800).TextColor(lit).LineHeight(1.25)
+			}
+			a.lyricReadingLines(c, line, i, lit)
+		})
 	})
 	if row.Clicked() {
 		a.seek(line.At)
@@ -421,4 +539,13 @@ func (a *app) lyricLine(c *ui.Context, line lyrics.Line, at time.Duration, i, no
 			}
 		}
 	}
+}
+
+func lyricHasRomanization(lines []lyrics.Line) bool {
+	for _, line := range lines {
+		if line.Romanization != "" {
+			return true
+		}
+	}
+	return false
 }

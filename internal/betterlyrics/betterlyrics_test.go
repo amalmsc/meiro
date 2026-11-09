@@ -1,7 +1,9 @@
 package betterlyrics
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -49,6 +51,21 @@ func TestParseTTMLReadsSyllablesWithNoSpaceBetween(t *testing.T) {
 	document := `<tt><body><div><p begin="0.000"><span begin="0.000">無</span><span begin="0.250">敵</span><span begin="0.500">の</span><span begin="0.750">笑顔</span></p></div></body></tt>`
 	got := ParseTTML(document)
 	if len(got) != 1 || got[0].Text != "無敵の笑顔" || len(got[0].Words) != 4 {
+		t.Fatalf("got %#v", got)
+	}
+}
+
+func TestParseTTMLKeepsRomanizationWithItsLine(t *testing.T) {
+	document := `<tt><head><metadata><transliterations><transliteration xml:lang="ja-Latn">
+<text for="L2"><span begin="1.250">mayonaka</span> no</text>
+<text for="missing">unused</text>
+</transliteration></transliterations></metadata></head>
+<body><div>
+<p begin="0.000" itunes:key="L1"><span begin="0.000">Hello</span></p>
+<p begin="1.000" itunes:key="L2"><span begin="1.000">真夜中</span></p>
+</div></body></tt>`
+	got := ParseTTML(document)
+	if len(got) != 2 || got[0].Romanization != "" || got[1].Romanization != "mayonaka no" || len(got[1].Romanized) != 1 || got[1].Romanized[0].Text != "mayonaka" {
 		t.Fatalf("got %#v", got)
 	}
 }
@@ -101,5 +118,24 @@ func TestGetReportsAFailure(t *testing.T) {
 	defer srv.Close()
 	if got, err := (&Client{BaseURL: srv.URL}).Get(context.Background(), Query{Title: "T"}); err == nil || got != nil {
 		t.Fatalf("got %#v, %v", got, err)
+	}
+}
+
+func TestTranslateKeepsBlankLinesAndSkipsEnglish(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/translate" || r.Method != http.MethodPost {
+			t.Errorf("request %s %s", r.Method, r.URL.Path)
+		}
+		body, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"lines":[{"translation":"Hello","romanization":"annyeong","needsTranslation":true},{"translation":null,"romanization":null,"needsTranslation":false},{"translation":"Already English","needsTranslation":false}]}`))
+	}))
+	defer srv.Close()
+	got, err := (&Client{BaseURL: srv.URL}).Translate(context.Background(), "abc", []string{"안녕", "", "Hello"})
+	if err != nil || len(got) != 3 || got[0] != (Translation{Text: "Hello", Romanization: "annyeong"}) || got[1] != (Translation{}) || got[2].Text != "" {
+		t.Fatalf("got %#v, %v", got, err)
+	}
+	if !bytes.Contains(body, []byte(`"to":"en"`)) || !bytes.Contains(body, []byte(`"videoId":"abc"`)) {
+		t.Fatalf("body %s", body)
 	}
 }

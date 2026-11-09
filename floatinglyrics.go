@@ -4,6 +4,8 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"time"
+
 	"github.com/elianiva/meiro/m3"
 )
 
@@ -19,6 +21,7 @@ func (a *app) openFloatingLyrics() {
 	if a.desktop == nil {
 		return
 	}
+	a.nowPlaying.floatingIgnore = false
 	d := a.desktop
 	if w := d.floatingLyrics.Load(); w != nil {
 		w.Show()
@@ -29,12 +32,14 @@ func (a *app) openFloatingLyrics() {
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title: "Meiro Floating Player", Width: 480, Height: 480,
 		MinWidth: 320, MinHeight: 320, Panel: true, AlwaysOnTop: true,
-		Transparent: true, Vibrancy: mygo.VibrancyGlassClear,
+		TitleBarStyle: mygo.TitleBarHidden,
+		Transparent:   true, Vibrancy: mygo.VibrancyGlassClear,
 		Content: ui.View(a.floatingLyricsView),
 	})
 	// A nonactivating panel otherwise becomes frosted over another app.
 	w.SetActiveAppearance(true)
 	d.floatingLyrics.Store(w)
+	a.followFloatingPointer(w)
 	a.setFloatingControls(a.nowPlaying.floatingControls)
 	w.OnClosed(func() {
 		d.floatingLyrics.CompareAndSwap(w, nil)
@@ -88,7 +93,20 @@ func (a *app) floatingLyricsView(c *ui.Context) {
 		surface = ui.Transparent
 	}
 	n := &a.nowPlaying
-	ui.Column(c.Key("floating-lyrics")).Fill().Background(surface).Children(func() {
+	n.floatingHit = n.floatingHit[:0]
+	bar := c.TitleBar()
+	if bar.Height > 0 {
+		// The native title bar is part of the clear-glass window, so it cannot
+		// stay opaque on its own. This bar replaces it and remains solid.
+		titleBar := ui.Row(c.Key("floating-titlebar")).Absolute().Top(0).Left(0).Right(0).Height(bar.Height).
+			Padding(0, bar.Left+8, 0, 12).AlignItems(ui.Center).Background(sc.SurfaceContainer).DragWindow()
+		titleBar.Children(func() {
+			m3.EmphasizedText(c, m3.LabelLarge, "Floating lyrics").TextColor(sc.OnSurface)
+		})
+		a.markFloatingHit(titleBar)
+	}
+	root := ui.Column(c.Key("floating-lyrics")).Fill().Padding(bar.Height, 0, 0).Background(surface)
+	root.Children(func() {
 		ui.Row(c.Key("header")).FillWidth().Shrink(0).Padding(8, 16).Gap(8).AlignItems(ui.Center).Children(func() {
 			if n.floatingControls {
 				a.art(c, a.current.Thumbnail, playerArt, 48, m3.Large)
@@ -105,18 +123,24 @@ func (a *app) floatingLyricsView(c *ui.Context) {
 			if n.floatingControls {
 				icon, label = m3.IconExpandLess, "Hide player controls"
 			}
-			if m3.IconButton(c, m3.IconButtonSpec{Icon: icon, Label: label, Key: "toggle-controls"}).Clicked() {
+			toggle := m3.IconButton(c, m3.IconButtonSpec{Icon: icon, Label: label, Key: "toggle-controls"})
+			a.markFloatingHit(toggle)
+			if toggle.Clicked() {
 				a.setFloatingControls(!n.floatingControls)
 			}
-			if m3.IconButton(c, m3.IconButtonSpec{Icon: m3.IconClose, Label: "Close floating lyrics", Key: "close"}).Clicked() {
+			closeButton := m3.IconButton(c, m3.IconButtonSpec{Icon: m3.IconClose, Label: "Close floating lyrics", Key: "close"})
+			a.markFloatingHit(closeButton)
+			if closeButton.Clicked() {
 				a.closeFloatingLyrics()
 			}
 		})
-		ui.Column(c.Key("transport")).FillWidth().Shrink(0).Children(func() {
-			a.transport(c, 48, 4)
-		})
+		transport := ui.Column(c.Key("transport")).FillWidth().Shrink(0)
+		transport.Children(func() { a.transport(c, 48, 4) })
+		a.markFloatingHit(transport)
 		if n.floatingControls {
-			ui.Column(c.Key("extra-controls")).FillWidth().Shrink(0).Padding(4, 16, 8).Gap(4).Children(func() {
+			extra := ui.Column(c.Key("extra-controls")).FillWidth().Shrink(0).Padding(4, 16, 8).Gap(4)
+			a.markFloatingHit(extra)
+			extra.Children(func() {
 				if !n.floatingScrubbing {
 					n.floatingScrub = a.playbackPosition().Seconds()
 				}
@@ -154,4 +178,42 @@ func (a *app) floatingLyricsView(c *ui.Context) {
 		})
 	})
 	a.lyricsSourceDialog(c)
+}
+
+// followFloatingPointer lets clicks on empty glass reach the window behind
+// the panel. Buttons, sliders, tabs and lyric lines keep the pointer, and the
+// native title bar stays available for dragging.
+func (a *app) followFloatingPointer(w *mygo.Window) {
+	a.every(50*time.Millisecond, func() {
+		if a.desktop == nil || a.desktop.floatingLyrics.Load() != w {
+			return
+		}
+		point := mygo.Screen.CursorScreenPoint()
+		content := w.ContentBounds()
+		inside := point.X >= content.X && point.X < content.X+content.Width && point.Y >= content.Y && point.Y < content.Y+content.Height
+		overControl := false
+		x, y := float32(point.X-content.X), float32(point.Y-content.Y)
+		for _, bounds := range a.nowPlaying.floatingHit {
+			if expandHit(bounds, 8).Contains(x, y) {
+				overControl = true
+				break
+			}
+		}
+		ignore := inside && !overControl
+		if ignore == a.nowPlaying.floatingIgnore {
+			return
+		}
+		a.nowPlaying.floatingIgnore = ignore
+		w.SetIgnoreMouseEvents(ignore)
+	})
+}
+
+func (a *app) markFloatingHit(target ui.Element) {
+	if target.Valid() {
+		a.nowPlaying.floatingHit = append(a.nowPlaying.floatingHit, target.LayoutBounds())
+	}
+}
+
+func expandHit(bounds ui.Rect, pad float32) ui.Rect {
+	return ui.Rect{X: bounds.X - pad, Y: bounds.Y - pad, W: bounds.W + 2*pad, H: bounds.H + 2*pad}
 }

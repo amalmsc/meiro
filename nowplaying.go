@@ -66,6 +66,8 @@ type nowPlayingState struct {
 	floatingControls    bool
 	floatingScrub       float64
 	floatingScrubbing   bool
+	floatingHit         []ui.Rect
+	floatingIgnore      bool
 	floatingTab         panelTab
 	floatingQueueList   ui.ListState
 	floatingQueueFollow string
@@ -382,6 +384,9 @@ func (a *app) nowPlayingTabs(c *ui.Context, compact bool, tab *panelTab) {
 			if t.tab == tabLyrics && a.current.IsEpisode() {
 				// An episode has its details where a song has its lyrics.
 				label = "Details"
+			}
+			if a.nowPlaying.floatingOpen {
+				a.markFloatingHit(button)
 			}
 			button.Grow(1).Basis(0).MinWidth(0).Height(m3.MinTarget).Center().Radius(m3.Full).
 				Cursor(ui.CursorPointer).Label(label).Tooltip(label).Background(ui.Transparent)

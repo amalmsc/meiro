@@ -147,6 +147,51 @@ func TestTheSungLineSitsInTheMiddleOfTheLyrics(t *testing.T) {
 	}
 }
 
+func TestRomanizationAndTranslationStayUnderTheirOwnLines(t *testing.T) {
+	a := newTestApp(t)
+	a.current = tracks("a")[0]
+	a.total, a.resumeID, a.scrub = time.Minute, "a", 12
+	a.betterLyrics = func(context.Context, betterlyrics.Query) ([]lyrics.Line, error) {
+		return []lyrics.Line{{At: 0, Text: "真夜中", Romanization: "mayonaka"}, {At: 10 * time.Second, Text: "笑顔", Romanization: "egao"}}, nil
+	}
+	asked := false
+	a.lyricTranslation = func(context.Context, string, []string) ([]betterlyrics.Translation, error) {
+		asked = true
+		return []betterlyrics.Translation{{Text: "midnight"}, {Text: "smile"}}, nil
+	}
+	a.openFloatingLyrics()
+	tt := ui.NewTester(a.floatingLyricsView, 480, 480)
+	for range 4 {
+		tt.Frame()
+	}
+	if !tt.HasText("笑顔") || tt.HasText("egao") || tt.HasText("smile") {
+		t.Fatalf("readings should stay hidden until asked for: %q", tt.Texts())
+	}
+	if asked {
+		t.Fatal("translation was requested before it was turned on")
+	}
+	if err := tt.Click("Romanization"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !asked || !tt.HasText("egao") || tt.HasText("smile") {
+		t.Fatalf("romanization should load without the translation: asked=%t %q", asked, tt.Texts())
+	}
+	if err := tt.Click("Translation"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !asked || !tt.HasText("smile") || !tt.HasText("midnight") {
+		t.Fatalf("translation did not load under both lines: asked=%t %q", asked, tt.Texts())
+	}
+	original, _ := tt.Find("笑顔")
+	reading, _ := tt.Find("egao")
+	translated, _ := tt.Find("smile")
+	if reading.Y <= original.Y || translated.Y <= reading.Y {
+		t.Fatalf("readings are not below their lyric: original=%v roman=%v translation=%v", original, reading, translated)
+	}
+}
+
 func TestLyricWordsLightAsTheyAreSung(t *testing.T) {
 	sc := m3.New(m3.Config{}, true).Scheme
 	line := lyrics.Line{At: 0, Text: "one two three", Words: []lyrics.Word{

@@ -111,38 +111,50 @@ func (c *Client) Get(ctx context.Context, q Query) ([]lyrics.Line, error) {
 // between them, which the document depends on, so it is kept with the word
 // before it. Spans that only group others, such as background vocals, are
 // read through, and a line with no timed span keeps the text it has.
+// A transliteration in the header is attached to the line its key names.
 func ParseTTML(document string) []lyrics.Line {
 	if strings.TrimSpace(document) == "" {
 		return nil
 	}
 	decoder := xml.NewDecoder(strings.NewReader(document))
 	var lines []lyrics.Line
+	var romanized []transliteration
+	var keys []string
 	for {
 		token, err := decoder.Token()
 		if err != nil {
 			break
 		}
 		start, ok := token.(xml.StartElement)
-		if !ok || start.Name.Local != "p" {
+		if !ok {
 			continue
 		}
-		line, ok, err := readLine(decoder, start)
+		if start.Name.Local == "transliteration" {
+			romanized = append(romanized, readTransliteration(decoder, start)...)
+			continue
+		}
+		if start.Name.Local != "p" {
+			continue
+		}
+		line, key, ok, err := readLine(decoder, start)
 		if err != nil {
 			break
 		}
 		if ok {
 			lines = append(lines, line)
+			keys = append(keys, key)
 		}
 	}
+	applyTransliterations(romanized, keys, lines)
 	return lines
 }
 
 // readLine reads a <p>, up to and including its end, into a line.
-func readLine(decoder *xml.Decoder, start xml.StartElement) (lyrics.Line, bool, error) {
+func readLine(decoder *xml.Decoder, start xml.StartElement) (lyrics.Line, string, bool, error) {
 	at, timed := clock(start, "begin")
 	reader := &spanReader{decoder: decoder}
 	if err := reader.walk(start.Name.Local); err != nil {
-		return lyrics.Line{}, false, err
+		return lyrics.Line{}, "", false, err
 	}
 	line := lyrics.Line{At: at, Text: strings.TrimSpace(reader.plain.String()), Words: reader.words}
 	if len(line.Words) > 0 && !timed {
@@ -150,7 +162,7 @@ func readLine(decoder *xml.Decoder, start xml.StartElement) (lyrics.Line, bool, 
 	}
 	// A line with no time of its own and no word that has one cannot be
 	// followed, and only adds noise to a list of them.
-	return line, line.Text != "" && (timed || len(line.Words) > 0), nil
+	return line, attr(start, "key"), line.Text != "" && (timed || len(line.Words) > 0), nil
 }
 
 // spanReader collects the words and the text of a line.
@@ -248,12 +260,105 @@ func (r *spanReader) spanText(end string) (string, error) {
 // clock reads a time attribute of an element: "hh:mm:ss.mmm", "mm:ss.mmm" or
 // seconds.
 func clock(element xml.StartElement, name string) (time.Duration, bool) {
-	for _, attr := range element.Attr {
-		if attr.Name.Local == name {
-			return parseClock(attr.Value)
+	return parseClock(attr(element, name))
+}
+
+func attr(element xml.StartElement, name string) string {
+	for _, item := range element.Attr {
+		if item.Name.Local == name {
+			return item.Value
 		}
 	}
-	return 0, false
+	return ""
+}
+
+type transliteration struct {
+	key, text string
+	words     []lyrics.Word
+}
+
+func readTransliteration(decoder *xml.Decoder, start xml.StartElement) []transliteration {
+	var current transliteration
+	var all []transliteration
+	flush := func() {
+		if strings.TrimSpace(current.text) != "" {
+			current.text = strings.TrimSpace(current.text)
+			all = append(all, current)
+		}
+		current = transliteration{}
+	}
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			break
+		}
+		switch t := token.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "text":
+				flush()
+				current.key = attr(t, "for")
+			case "span":
+				at, timed := clock(t, "begin")
+				text := textOf(decoder, t.Name.Local)
+				current.text += text
+				if timed && strings.TrimSpace(text) != "" {
+					current.words = append(current.words, lyrics.Word{At: at, Text: text})
+				}
+			default:
+				_ = decoder.Skip()
+			}
+		case xml.CharData:
+			current.text += string(t)
+		case xml.EndElement:
+			if t.Name.Local == "text" {
+				flush()
+			}
+			if t.Name.Local == start.Name.Local {
+				flush()
+				return all
+			}
+		}
+	}
+	return nil
+}
+
+// applyTransliterations attaches each romanized line to the lyric line its key names.
+func applyTransliterations(items []transliteration, keys []string, lines []lyrics.Line) {
+	index := map[string]int{}
+	for i, key := range keys {
+		if key != "" {
+			index[key] = i
+		}
+	}
+	for _, item := range items {
+		i, ok := index[item.key]
+		if !ok {
+			continue
+		}
+		lines[i].Romanization = item.text
+		lines[i].Romanized = item.words
+	}
+}
+
+func textOf(decoder *xml.Decoder, end string) string {
+	var text strings.Builder
+	for {
+		token, err := decoder.Token()
+		if err != nil {
+			return text.String()
+		}
+		switch t := token.(type) {
+		case xml.CharData:
+			text.WriteString(string(t))
+		case xml.StartElement:
+			text.WriteString(textOf(decoder, t.Name.Local))
+		case xml.EndElement:
+			if t.Name.Local == end {
+				return text.String()
+			}
+		}
+	}
 }
 
 // parseClock reads a clock time, as TTML writes one.

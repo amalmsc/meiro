@@ -75,6 +75,10 @@ type Settings struct {
 	SignInSource string `json:"signInSource,omitempty"`
 	// StaticLyrics shows lyrics as plain text even when a track has them timed.
 	StaticLyrics bool `json:"staticLyrics,omitempty"`
+	// LyricRomanization shows a Latin-letter reading under lines that have one.
+	LyricRomanization bool `json:"lyricRomanization,omitempty"`
+	// LyricTranslation shows an English reading under timed lyric lines.
+	LyricTranslation bool `json:"lyricTranslation,omitempty"`
 	// NotifyTrack shows a desktop notification when a new track starts,
 	// except on macOS, where playback is presented by the notch or menu bar.
 	NotifyTrack bool `json:"notifyTrack"`

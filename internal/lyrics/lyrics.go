@@ -22,6 +22,12 @@ type Line struct {
 	At    time.Duration
 	Text  string
 	Words []Word
+	// Romanization is the line in Latin letters, when the source has one,
+	// and Romanized times its parts the way Words times the original.
+	Romanization string
+	Romanized    []Word
+	// Translation is the line in another language. It is not timed.
+	Translation string
 }
 
 // IndexAt is the line being sung at position: the last one that has started.
